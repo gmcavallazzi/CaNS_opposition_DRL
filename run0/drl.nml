@@ -1,0 +1,9 @@
+&opp_drl
+n_act = 1.
+n_eps = 25600.
+bnx = 16
+bny = 16
+drl_inc = 1
+n_agents = 36864
+num_files = 9
+\

@@ -1,0 +1,37 @@
+run/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pyw
+*.pyz
+
+# project specific directories
+build/
+run0/logs_pettingzoo_grid_shared/
+run0/checkpoints_pettingzoo_grid_shared/
+run0/action_analysis*/
+run0/data/*.bin
+run0/data/*.out
+run0/model_visualizations/
+run0/episode_plots/
+run0/ridgeplots/
+run0/visualization*/
+run0/*png
+run0/cans/
+run0/R-*
+run0/E-*
+run0/*.tar.gz
+
+*.tar.gz
+
+run/
+run1/
+run2/
+run0_*/
+run_*/
+runPPO/
+
+# specific files
+ACKNOWLEDGEMENTS
+CONTRIBUTORS
+LICENSE

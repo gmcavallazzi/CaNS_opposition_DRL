@@ -1,0 +1,53 @@
+# General parameters
+n_actions: 1800
+n_actuations: 1800
+total_timesteps: 1800000  # n_actions * 400
+maxprocs: [144]
+halo: 0
+
+# Network architecture
+net_arch:
+  qf: [16, 64, 64]  # Critic network architecture
+  pi: [8]   
+
+# Action space parameters
+action:
+  om_max: 0.064
+
+# Grid parameters
+grid:
+  target:
+    i: 64
+    j: 64
+
+# Reward parameters
+reward:
+  function: "dpdx"
+  dpdx:
+    min: -0.0045
+    max: -0.0018
+  global_weight: 1.0
+  local_weight: 0.0
+
+# Model parameters
+model:
+  learning_rate: 0.001
+  buffer_size: 5_000_000
+  weight_decay: 0.00001  # Add L2 regularization
+  batch_size: 64
+  tau: 0.01
+  gamma: 0.995
+  train_freq: 300
+  gradient_steps: 64
+  action_noise:
+    sigma: 0.0064
+
+# Training parameters
+training:
+  start_episode_length: 1800
+  save_freq: 3600
+  log_interval: 1
+  gradient_clip: 1.0  # Enable gradient clipping
+  layer_norm: true    # Enable layer normalization
+  use_tanh_output: true  # Explicit tanh activation in final output
+  xavier_init_gain: 1.5  # Higher gain for Xavier initialization
