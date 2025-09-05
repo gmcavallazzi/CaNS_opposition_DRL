@@ -58,9 +58,9 @@ echo "Node list: $SLURM_JOB_NODELIST"
 mpirun \
   --verbose \
   --mca plm_rsh_agent srun \
-  --mca btl openib,vader,self \
-  --mca btl_openib_use_eager_rdma 1 \
-  --mca btl_openib_eager_limit 32768 \
+  --mca btl tcp,vader,self \
+  --mca btl_tcp_if_include ib0 \
+  --mca oob_tcp_if_include ib0 \
   --mca pml ob1 \
   --mca btl_base_warn_component_unused 0 \
   --mca coll_tuned_use_dynamic_rules 1 \
