@@ -2,7 +2,7 @@
 #SBATCH -D /users/addh496/sharedscratch/CaNS_DRL2.4/pz_guastoni0_highdim/ib_spawn_test
 #SBATCH -J ib_test_openib
 #SBATCH --nodes=2
-#SBATCH --ntasks-per-node=2
+#SBATCH --ntasks-per-node=4
 #SBATCH --time=10:00
 #SBATCH --exclusive
 #SBATCH --output=test_openib.%j.out
@@ -14,7 +14,7 @@ module load mpi/openmpi/4.1.1
 
 echo "=== Testing Native OpenIB BTL with Spawning ==="
 echo "Nodes: $SLURM_JOB_NUM_NODES"
-echo "Tasks per node: 2"
+echo "Tasks per node: 4"
 
 cd $SLURM_SUBMIT_DIR
 
@@ -34,7 +34,7 @@ mpirun \
   --mca btl_openib_eager_limit 32768 \
   --mca pml ob1 \
   --bind-to core \
-  -n 4 \
+  -n 2 \
   ./parent 2>&1 | tee openib_results.log
 
 echo ""
@@ -48,7 +48,7 @@ mpirun \
   --mca btl_tcp_if_include ib0 \
   --mca pml ob1 \
   --bind-to core \
-  -n 4 \
+  -n 2 \
   ./parent 2>&1 | tee tcp_ib_results.log
 
 echo ""
