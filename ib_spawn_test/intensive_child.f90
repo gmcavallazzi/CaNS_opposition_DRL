@@ -38,7 +38,7 @@ program intensive_spawn_child
     end_row = start_row + rows_per_proc - 1
     if (rank == size - 1) end_row = matrix_size  ! Last proc gets remaining rows
     
-    write(*,'(A,I0,A,I0,A,I0,A,I0)') 'Child ', rank, ' computing rows ', start_row, ' to ', end_row
+    ! write(*,'(A,I0,A,I0,A,I0,A,I0)') 'Child ', rank, ' computing rows ', start_row, ' to ', end_row
     
     ! Initialize local result
     local_result = 0.0_8
@@ -61,8 +61,8 @@ program intensive_spawn_child
     
     compute_end = MPI_Wtime()
     
-    write(*,'(A,I0,A,F8.3,A)') 'Child ', rank, ' computation time: ', &
-          (compute_end-compute_start)*1000, ' ms'
+    ! write(*,'(A,I0,A,F8.3,A)') 'Child ', rank, ' computation time: ', &
+    !       (compute_end-compute_start)*1000, ' ms'
     
     ! Send results back to parent
     call MPI_Reduce(local_result, MPI_IN_PLACE, matrix_size*matrix_size, &

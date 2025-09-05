@@ -69,7 +69,7 @@ program intensive_spawn_parent
         call MPI_Bcast(matrix_b, matrix_size*matrix_size, MPI_DOUBLE_PRECISION, MPI_ROOT, intercomm, ierr)
         
         ! Children do computation, then send results back
-        call MPI_Reduce(MPI_IN_PLACE, result_matrix, matrix_size*matrix_size, &
+        call MPI_Reduce(result_matrix, result_matrix, matrix_size*matrix_size, &
                        MPI_DOUBLE_PRECISION, MPI_SUM, MPI_ROOT, intercomm, ierr)
         
         comm_time = MPI_Wtime() - comm_time

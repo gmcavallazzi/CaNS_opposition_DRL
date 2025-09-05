@@ -62,7 +62,6 @@ for config in "${configs[@]}"; do
     rm hostfile.tmp
     
     timeout 600s mpirun \
-      --verbose \
       --mca plm_rsh_agent srun \
       --mca btl tcp,vader,self \
       --mca btl_tcp_if_include ib0 \
@@ -90,7 +89,6 @@ for config in "${configs[@]}"; do
     echo "Controller procs: 1, Worker procs: ${child_procs}"
     
     timeout 600s mpirun \
-      --verbose \
       --mca plm_rsh_agent srun \
       --mca btl tcp,vader,self \
       --mca btl_tcp_if_include ib0 \

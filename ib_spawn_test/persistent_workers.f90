@@ -115,7 +115,7 @@ program persistent_workers
         allocate(matrix_b(matrix_size, matrix_size))
         allocate(local_result(matrix_size, matrix_size))
         
-        write(*,'(A,I0,A)') 'Worker ', rank, ' ready for work'
+        ! write(*,'(A,I0,A)') 'Worker ', rank, ' ready for work'
         
         ! Worker main loop - wait for work until stop signal
         do
@@ -128,15 +128,15 @@ program persistent_workers
                                       worker_rank, worker_size, worker_comm)
             compute_time = MPI_Wtime() - compute_time
             
-            write(*,'(A,I0,A,F8.3,A)') 'Worker ', rank, ' computation time: ', &
-                  compute_time*1000, ' ms'
+            ! write(*,'(A,I0,A,F8.3,A)') 'Worker ', rank, ' computation time: ', &
+            !       compute_time*1000, ' ms'
             
             ! Send results back
             call send_results_to_controller(local_result, matrix_size, &
                                           MPI_COMM_WORLD, controller_rank, rank)
         enddo
         
-        write(*,'(A,I0,A)') 'Worker ', rank, ' shutting down'
+        ! write(*,'(A,I0,A)') 'Worker ', rank, ' shutting down'
         deallocate(matrix_a, matrix_b, local_result)
     endif
     
