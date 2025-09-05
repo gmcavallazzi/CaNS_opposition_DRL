@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH -D /users/addh496/sharedscratch/CaNS_DRL2.4/pz_guastoni0_highdim/ib_spawn_test
-#SBATCH -J simple_spawn_test
+#SBATCH -J simple
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=48
 #SBATCH --time=10:00
