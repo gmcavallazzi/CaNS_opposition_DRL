@@ -51,13 +51,16 @@ mpirun \
   --mca coll_tuned_bcast_algorithm 1 \
   --mca coll_tuned_reduce_algorithm 2 \
   --mca btl_base_warn_component_unused 0 \
+  --mca btl_base_verbose 0 \
+  --mca mca_base_component_show_load_errors 0 \
+  --mca mca_verbose 0 \
   --hostfile hostfile \
   --map-by node \
   --bind-to none \
   -n 1 \
   -x LD_LIBRARY_PATH \
   -x PYTHONPATH \
-  python python_spawn_test.py 2>&1 | grep -v -E "(mca:|btl:|select:|bml:)"
+  python python_spawn_test.py
 
 echo ""
 echo "--- TEST 2: PERSISTENT METHOD (Python + Python workers) ---"
@@ -66,10 +69,12 @@ mpirun \
   --mca btl_tcp_if_include ib0 \
   --mca btl_base_warn_component_unused 0 \
   --mca btl_base_verbose 0 \
+  --mca mca_base_component_show_load_errors 0 \
+  --mca mca_verbose 0 \
   --hostfile hostfile \
   --bind-to core \
   -n 9 \
-  python python_persistent_test.py 2>&1 | grep -v -E "(mca:|btl:|select:|bml:)"
+  python python_persistent_test.py
 
 # Clean up
 rm -f hostfile
