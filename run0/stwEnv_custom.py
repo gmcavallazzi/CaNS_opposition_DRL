@@ -40,20 +40,25 @@ def agent_processing_worker():
             
         # Receive data from main process
         if ourid == 1:
+            print(f"WORKER {myid}: Receiving data from main process")
             # Receive grid dimensions
             grid_dims = np.empty(2, dtype=np.int32)
             intracomm.Recv(grid_dims, source=0, tag=301)
+            print(f"WORKER {myid}: Received grid dimensions {grid_dims}")
             
             # Receive observation data (keep as float64)
             grid_size = grid_dims[0] * grid_dims[1]
             u_obs_flat = np.empty(grid_size, dtype=np.float64)
             w_obs_flat = np.empty(grid_size, dtype=np.float64)
+            print(f"WORKER {myid}: Receiving {grid_size} observation values")
             intracomm.Recv(u_obs_flat, source=0, tag=302)
             intracomm.Recv(w_obs_flat, source=0, tag=303)
+            print(f"WORKER {myid}: Received observation data")
             
             # Receive om_max only (halo assumed to be 0)
             om_max_arr = np.empty(1, dtype=np.float64)
             intracomm.Recv(om_max_arr, source=0, tag=304)
+            print(f"WORKER {myid}: Received om_max = {om_max_arr[0]}")
         else:
             grid_dims = np.empty(2, dtype=np.int32)
             grid_size = None
@@ -62,6 +67,7 @@ def agent_processing_worker():
             om_max_arr = np.empty(1, dtype=np.float64)
         
         # Broadcast to all workers
+        print(f"WORKER {myid}: Broadcasting data to all workers")
         workercomm.Bcast(grid_dims, root=0)
         
         if grid_size is None:
@@ -72,6 +78,7 @@ def agent_processing_worker():
         workercomm.Bcast(u_obs_flat, root=0)
         workercomm.Bcast(w_obs_flat, root=0)
         workercomm.Bcast(om_max_arr, root=0)
+        print(f"WORKER {myid}: Broadcast complete")
         
         # Extract parameters
         grid_i, grid_j = grid_dims
@@ -88,6 +95,9 @@ def agent_processing_worker():
         end_idx = (myid + 1) * agents_per_worker if myid < mysize - 1 else total_agents
         
         # Process assigned agents (halo = 0 only)
+        num_agents_for_worker = end_idx - start_idx
+        print(f"WORKER {myid}: Processing {num_agents_for_worker} agents (indices {start_idx}-{end_idx})")
+        
         local_observations = []
         local_agent_ids = []
         
@@ -104,12 +114,15 @@ def agent_processing_worker():
             
             local_observations.append(local_obs.flatten())
         
+        print(f"WORKER {myid}: Finished processing, gathering results")
         # Gather all observations
         all_observations = workercomm.gather(local_observations, root=0)
         all_agent_ids = workercomm.gather(local_agent_ids, root=0)
+        print(f"WORKER {myid}: Gather complete")
         
         # Send results back to main process
         if myid == 0:
+            print(f"WORKER 0: Flattening gathered data from {mysize} workers")
             # Flatten gathered data
             flat_observations = []
             flat_agent_ids = []
@@ -119,20 +132,24 @@ def agent_processing_worker():
             
             # Send number of observations
             num_obs = len(flat_observations)
+            print(f"WORKER 0: Sending {num_obs} observations to main process")
             result_count = np.array([num_obs], dtype=np.int32)
             intracomm.Send(result_count, dest=0, tag=350)
             
             # Send observations as one large array
             if num_obs > 0:
+                print(f"WORKER 0: Sending observation data")
                 all_obs_array = np.array(flat_observations, dtype=np.float32).flatten()
                 intracomm.Send(all_obs_array, dest=0, tag=351)
                 
                 # Send agent IDs
+                print(f"WORKER 0: Sending agent IDs")
                 agent_id_str = ",".join(flat_agent_ids)
                 agent_id_bytes = agent_id_str.encode('utf-8')
                 id_length = np.array([len(agent_id_bytes)], dtype=np.int32)
                 intracomm.Send(id_length, dest=0, tag=352)
                 intracomm.Send([agent_id_bytes, MPI.CHAR], dest=0, tag=353)
+                print(f"WORKER 0: All data sent to main process")
     
     # Cleanup
     workercomm.Free()
@@ -414,27 +431,35 @@ class STWParallelEnvCustom(ParallelEnv):
 
     def _process_agents_parallel(self, u_obs_mat, w_obs_mat):
         """Process agent observations using parallel workers."""
+        print(f"MAIN: Starting parallel processing for {self._num_agents} agents")
+        
         # Send work signal to workers
         work_signal = np.array([1], dtype=np.int32)
+        print("MAIN: Sending work signal to workers")
         self.intracomm_workers.Send(work_signal, dest=1, tag=300)
         
         # Send grid dimensions
         grid_dims = np.array([self.grid_i, self.grid_j], dtype=np.int32)
+        print(f"MAIN: Sending grid dimensions {self.grid_i}x{self.grid_j}")
         self.intracomm_workers.Send(grid_dims, dest=1, tag=301)
         
         # Send observation data (keep as float64)
         u_obs_flat = u_obs_mat.flatten().astype(np.float64)
         w_obs_flat = w_obs_mat.flatten().astype(np.float64)
+        print(f"MAIN: Sending observation data (u: {u_obs_flat.shape}, w: {w_obs_flat.shape})")
         self.intracomm_workers.Send(u_obs_flat, dest=1, tag=302)
         self.intracomm_workers.Send(w_obs_flat, dest=1, tag=303)
         
         # Send only om_max (halo assumed 0)
         om_max_arr = np.array([self.config['action']['om_max']], dtype=np.float64)
+        print(f"MAIN: Sending om_max = {om_max_arr[0]}")
         self.intracomm_workers.Send(om_max_arr, dest=1, tag=304)
         
+        print("MAIN: Waiting for results from workers...")
         # Receive results
         result_count = np.empty(1, dtype=np.int32)
         self.intracomm_workers.Recv(result_count, source=1, tag=350)
+        print(f"MAIN: Received result count: {result_count[0]}")
         
         observations = {}
         if result_count[0] > 0:
@@ -442,22 +467,26 @@ class STWParallelEnvCustom(ParallelEnv):
             obs_size = 2
             
             # Receive all observations
+            print(f"MAIN: Receiving {result_count[0] * obs_size} observation values")
             all_obs_flat = np.empty(result_count[0] * obs_size, dtype=np.float32)
             self.intracomm_workers.Recv(all_obs_flat, source=1, tag=351)
             
             # Receive agent IDs
+            print("MAIN: Receiving agent IDs")
             id_length = np.empty(1, dtype=np.int32)
             self.intracomm_workers.Recv(id_length, source=1, tag=352)
             agent_id_bytes = np.empty(id_length[0], dtype=np.uint8)
             self.intracomm_workers.Recv([agent_id_bytes, MPI.CHAR], source=1, tag=353)
             
             # Reconstruct observations
+            print("MAIN: Reconstructing observations dictionary")
             agent_ids = agent_id_bytes.tobytes().decode('utf-8').split(',')
             all_obs = all_obs_flat.reshape(result_count[0], 1, 1, 2)  # halo=0: 1x1x2
             
             for i, agent_id in enumerate(agent_ids):
                 observations[agent_id] = all_obs[i]
         
+        print(f"MAIN: Parallel processing complete, got {len(observations)} observations")
         return observations
 
     def _process_agents_sequential(self, u_obs_mat, w_obs_mat):
