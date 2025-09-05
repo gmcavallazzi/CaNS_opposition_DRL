@@ -31,18 +31,16 @@ def main():
     worker_comm.Recv(result, source=0, tag=99)
     print("Python: Result received")
     
-    print("Python: Disconnecting from workers...")
-    # Clean up - simple disconnect, let MPI handle cleanup
-    try:
-        worker_comm.Disconnect()
-        print("Python: Disconnected")
-    except Exception as e:
-        print(f"Python: Disconnect completed (with exception: {e})")
-    
     end_time = time.time()
+    
+    print("Python: Skipping disconnect - let MPI auto-cleanup")
+    # Skip explicit disconnect - let MPI_Finalize handle it
     
     print(f"Result sum: {np.sum(result):.2f}")
     print(f"Spawn total time: {(end_time - start_time)*1000:.3f} ms")
+    
+    # Small delay after printing results to let workers exit cleanly
+    time.sleep(0.1)
 
 if __name__ == "__main__":
     main()
