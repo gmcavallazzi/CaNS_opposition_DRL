@@ -6,6 +6,9 @@ program test_spawn_child
     integer :: rank, size, ierr, msg_size
     real(8), allocatable :: recv_data(:), send_data(:)
     integer :: parent_rank, parent_size
+    integer, parameter :: num_tests = 4
+    integer, parameter :: test_sizes(4) = [1024, 8192, 32768, 131072]
+    integer :: i
     
     call MPI_Init(ierr)
     call MPI_Comm_get_parent(parent_comm, ierr)
@@ -20,11 +23,6 @@ program test_spawn_child
     call MPI_Comm_remote_size(parent_comm, parent_size, ierr)
     
     write(*,'(A,I0,A,I0,A,I0)') 'Child: rank ', rank, ' of ', size, ', parent_size=', parent_size
-    
-    ! Test different message sizes (same as parent)
-    integer, parameter :: num_tests = 4
-    integer, parameter :: test_sizes(4) = [1024, 8192, 32768, 131072]
-    integer :: i
     
     do i = 1, num_tests
         msg_size = test_sizes(i)
