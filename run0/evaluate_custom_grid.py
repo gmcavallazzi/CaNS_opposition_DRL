@@ -11,7 +11,7 @@ import argparse
 from typing import Dict, Tuple
 from datetime import datetime
 
-from stwEnv_pettingzoo import STWParallelEnv  # Your modified environment
+from stwEnv_custom import STWParallelEnvCustom  # Custom environment with parallel processing
 from models_pettingzoo import SharedPolicyMADDPG
 
 
@@ -28,7 +28,8 @@ def evaluate_with_image_saving(
     num_episodes: int = 2,  # Fewer episodes when saving images
     device: str = "cpu",
     save_images: bool = True,
-    base_save_dir: str = "./evaluation_images"
+    base_save_dir: str = "./evaluation_images",
+    num_workers: int = None
 ):
     """Evaluate model and save images of actions and observations"""
     
@@ -61,11 +62,12 @@ def evaluate_with_image_saving(
     config['grid']['target']['i'] = validation_grid[0]
     config['grid']['target']['j'] = validation_grid[1]
     
-    # Create environment WITH image saving
-    env = STWParallelEnv(
+    # Create custom environment WITH parallel processing and image saving
+    env = STWParallelEnvCustom(
         config, 
         save_images=save_images,
-        image_save_dir=image_save_dir
+        image_save_dir=image_save_dir,
+        num_workers=num_workers  # Use provided num_workers or auto-detect
     )
     agents = env.possible_agents
     obs_shape = env.observation_spaces[agents[0]].shape
@@ -217,6 +219,7 @@ def main():
     parser.add_argument("--device", type=str, default="cpu", help="Device to use (cpu or cuda)")
     parser.add_argument("--no_save", action="store_true", help="Disable image saving")
     parser.add_argument("--save_dir", type=str, default="./evaluation_images", help="Base directory to save images")
+    parser.add_argument("--num_workers", type=int, default=None, help="Number of parallel workers (None for auto-detect)")
     
     args = parser.parse_args()
 
@@ -227,7 +230,8 @@ def main():
         num_episodes=args.episodes,
         device=args.device,
         save_images=not args.no_save,
-        base_save_dir=args.save_dir
+        base_save_dir=args.save_dir,
+        num_workers=args.num_workers
     )
 
     print("\n✓ Evaluation complete.")
