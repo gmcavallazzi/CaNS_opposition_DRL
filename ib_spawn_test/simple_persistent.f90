@@ -26,7 +26,7 @@ program simple_persistent
         start_time = MPI_Wtime()
     endif
     
-    ! Broadcast data to all workers
+    ! Broadcast data to all workers.
     call MPI_Bcast(data, array_size, MPI_DOUBLE_PRECISION, 0, MPI_COMM_WORLD, ierr)
     
     if (.not. is_controller) then

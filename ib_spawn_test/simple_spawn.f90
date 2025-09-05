@@ -19,7 +19,7 @@ program simple_spawn
         write(*,'(A)') '=== SPAWN TEST: Controller + workers do collective operation ==='
     endif
     
-    ! Initialize data
+    ! Initialize data.
     data = 3.14_8
     result = 0.0_8
     

@@ -18,7 +18,7 @@ echo ""
 cd $SLURM_SUBMIT_DIR
 make clean && make
 
-# Create hostfile
+# Create hostfile.
 scontrol show hostnames $SLURM_JOB_NODELIST > hostfile.tmp
 while read node; do
     echo "$node slots=48"

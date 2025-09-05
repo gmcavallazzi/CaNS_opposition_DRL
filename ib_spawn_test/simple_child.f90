@@ -15,7 +15,7 @@ program simple_child
     
     allocate(data(array_size), local_result(array_size))
     
-    ! Receive data from parent
+    ! Receive data from parent.
     call MPI_Bcast(data, array_size, MPI_DOUBLE_PRECISION, 0, parent_comm, ierr)
     
     ! Do intensive computation
