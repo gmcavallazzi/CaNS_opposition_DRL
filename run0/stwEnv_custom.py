@@ -38,28 +38,28 @@ def agent_processing_worker():
         if work_signal[0] == -1:  # Shutdown signal
             break
             
-        # Receive observation matrices and config
+        # Receive data from main process
         if ourid == 1:
             # Receive grid dimensions
             grid_dims = np.empty(2, dtype=np.int32)
             intracomm.Recv(grid_dims, source=0, tag=301)
             
-            # Receive observation data
+            # Receive observation data (keep as float64)
             grid_size = grid_dims[0] * grid_dims[1]
             u_obs_flat = np.empty(grid_size, dtype=np.float64)
             w_obs_flat = np.empty(grid_size, dtype=np.float64)
             intracomm.Recv(u_obs_flat, source=0, tag=302)
             intracomm.Recv(w_obs_flat, source=0, tag=303)
             
-            # Receive halo and om_max
-            params = np.empty(2, dtype=np.float64)
-            intracomm.Recv(params, source=0, tag=304)
+            # Receive om_max only (halo assumed to be 0)
+            om_max_arr = np.empty(1, dtype=np.float64)
+            intracomm.Recv(om_max_arr, source=0, tag=304)
         else:
             grid_dims = np.empty(2, dtype=np.int32)
             grid_size = None
             u_obs_flat = None
             w_obs_flat = None
-            params = np.empty(2, dtype=np.float64)
+            om_max_arr = np.empty(1, dtype=np.float64)
         
         # Broadcast to all workers
         workercomm.Bcast(grid_dims, root=0)
@@ -71,14 +71,15 @@ def agent_processing_worker():
             
         workercomm.Bcast(u_obs_flat, root=0)
         workercomm.Bcast(w_obs_flat, root=0)
-        workercomm.Bcast(params, root=0)
+        workercomm.Bcast(om_max_arr, root=0)
         
-        # Reshape to matrices
+        # Extract parameters
         grid_i, grid_j = grid_dims
+        om_max = om_max_arr[0]
+        
+        # Reshape to matrices (keep as float64)
         u_obs_mat = u_obs_flat.reshape(grid_i, grid_j)
         w_obs_mat = w_obs_flat.reshape(grid_i, grid_j)
-        halo = int(params[0])
-        om_max = params[1]
         
         # Determine work chunk for this worker
         total_agents = grid_i * grid_j
@@ -86,7 +87,7 @@ def agent_processing_worker():
         start_idx = myid * agents_per_worker
         end_idx = (myid + 1) * agents_per_worker if myid < mysize - 1 else total_agents
         
-        # Process assigned agents
+        # Process assigned agents (halo = 0 only)
         local_observations = []
         local_agent_ids = []
         
@@ -96,23 +97,10 @@ def agent_processing_worker():
             agent_id = f"agent_{i}_{j}"
             local_agent_ids.append(agent_id)
             
-            # Compute local observation (copied from original get_local_observation)
-            if halo == 0:
-                local_obs = np.zeros((1, 1, 2), dtype=np.float32)
-                local_obs[0, 0, 0] = u_obs_mat[i, j] * om_max
-                local_obs[0, 0, 1] = w_obs_mat[i, j] * om_max
-            else:
-                size = 2 * halo + 1
-                local_obs = np.zeros((size, size, 2), dtype=np.float32)
-                
-                for di in range(-halo, halo + 1):
-                    for dj in range(-halo, halo + 1):
-                        obs_i = (i + di) % grid_i
-                        obs_j = (j + dj) % grid_j
-                        local_i = di + halo
-                        local_j = dj + halo
-                        local_obs[local_i, local_j, 0] = u_obs_mat[obs_i, obs_j] * om_max
-                        local_obs[local_i, local_j, 1] = w_obs_mat[obs_i, obs_j] * om_max
+            # Create 1x1x2 observation (halo=0)
+            local_obs = np.zeros((1, 1, 2), dtype=np.float32)
+            local_obs[0, 0, 0] = u_obs_mat[i, j] * om_max
+            local_obs[0, 0, 1] = w_obs_mat[i, j] * om_max
             
             local_observations.append(local_obs.flatten())
         
@@ -136,8 +124,7 @@ def agent_processing_worker():
             
             # Send observations as one large array
             if num_obs > 0:
-                obs_size = len(flat_observations[0])
-                all_obs_array = np.array(flat_observations).flatten()
+                all_obs_array = np.array(flat_observations, dtype=np.float32).flatten()
                 intracomm.Send(all_obs_array, dest=0, tag=351)
                 
                 # Send agent IDs
@@ -435,15 +422,15 @@ class STWParallelEnvCustom(ParallelEnv):
         grid_dims = np.array([self.grid_i, self.grid_j], dtype=np.int32)
         self.intracomm_workers.Send(grid_dims, dest=1, tag=301)
         
-        # Send observation data
-        u_obs_flat = u_obs_mat.flatten()
-        w_obs_flat = w_obs_mat.flatten()
+        # Send observation data (keep as float64)
+        u_obs_flat = u_obs_mat.flatten().astype(np.float64)
+        w_obs_flat = w_obs_mat.flatten().astype(np.float64)
         self.intracomm_workers.Send(u_obs_flat, dest=1, tag=302)
         self.intracomm_workers.Send(w_obs_flat, dest=1, tag=303)
         
-        # Send parameters
-        params = np.array([float(self.halo), self.config['action']['om_max']], dtype=np.float64)
-        self.intracomm_workers.Send(params, dest=1, tag=304)
+        # Send only om_max (halo assumed 0)
+        om_max_arr = np.array([self.config['action']['om_max']], dtype=np.float64)
+        self.intracomm_workers.Send(om_max_arr, dest=1, tag=304)
         
         # Receive results
         result_count = np.empty(1, dtype=np.int32)
@@ -451,10 +438,8 @@ class STWParallelEnvCustom(ParallelEnv):
         
         observations = {}
         if result_count[0] > 0:
-            # Determine observation size
-            obs_height = 2 * self.halo + 1 if self.halo > 0 else 1
-            obs_width = 2 * self.halo + 1 if self.halo > 0 else 1
-            obs_size = obs_height * obs_width * 2
+            # For halo=0: observation size is 1x1x2 = 2
+            obs_size = 2
             
             # Receive all observations
             all_obs_flat = np.empty(result_count[0] * obs_size, dtype=np.float32)
@@ -468,7 +453,7 @@ class STWParallelEnvCustom(ParallelEnv):
             
             # Reconstruct observations
             agent_ids = agent_id_bytes.tobytes().decode('utf-8').split(',')
-            all_obs = all_obs_flat.reshape(result_count[0], obs_height, obs_width, 2)
+            all_obs = all_obs_flat.reshape(result_count[0], 1, 1, 2)  # halo=0: 1x1x2
             
             for i, agent_id in enumerate(agent_ids):
                 observations[agent_id] = all_obs[i]
