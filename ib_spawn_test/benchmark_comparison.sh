@@ -2,7 +2,7 @@
 #SBATCH -D /users/addh496/sharedscratch/CaNS_DRL2.4/pz_guastoni0_highdim/ib_spawn_test
 #SBATCH -J benchmark_spawn_vs_persistent
 #SBATCH --nodes=2
-#SBATCH --ntasks-per-node=16
+#SBATCH --ntasks-per-node=48
 #SBATCH --time=30:00
 #SBATCH --exclusive
 #SBATCH --output=benchmark_%j.out
@@ -14,7 +14,7 @@ module load mpi/openmpi/4.1.1
 
 echo "=== SPAWN vs PERSISTENT WORKERS BENCHMARK ==="
 echo "Nodes: $SLURM_JOB_NUM_NODES"
-echo "Total processes available: $SLURM_NTASKS"
+echo "Total processes available: $SLURM_NTASKS (will use subset for tests)"
 echo "Testing with different core counts and matrix sizes"
 echo ""
 
@@ -35,9 +35,9 @@ echo "=========================================="
 
 # Test configurations: [total_procs, matrix_size, episodes]
 declare -a configs=(
-    "8 512 3"
-    "16 1024 3"  
-    "32 1024 3"
+    "9 512 3"
+    "17 1024 3"  
+    "33 1024 3"
 )
 
 for config in "${configs[@]}"; do
@@ -46,7 +46,7 @@ for config in "${configs[@]}"; do
     
     echo ""
     echo "===========================================" 
-    echo "Configuration: ${total_procs} cores, ${matrix_size}x${matrix_size} matrix, ${episodes} episodes"
+    echo "Configuration: ${total_procs} processes (1 controller + ${child_procs} workers), ${matrix_size}x${matrix_size} matrix, ${episodes} episodes"
     echo "==========================================="
     
     # Test 1: Spawn-based approach (using your working settings)
@@ -57,7 +57,7 @@ for config in "${configs[@]}"; do
     # Create hostfile for spawning (same as your working setup)
     scontrol show hostnames $SLURM_JOB_NODELIST > hostfile.tmp
     while read node; do
-        echo "$node slots=16"
+        echo "$node slots=48"
     done < hostfile.tmp > hostfile
     rm hostfile.tmp
     
