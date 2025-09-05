@@ -32,13 +32,12 @@ def main():
     print("Python: Result received")
     
     print("Python: Disconnecting from workers...")
-    # Clean up - add barrier before disconnect
+    # Clean up - simple disconnect, let MPI handle cleanup
     try:
-        worker_comm.Barrier()
         worker_comm.Disconnect()
         print("Python: Disconnected")
-    except:
-        print("Python: Disconnect completed (with exception - normal for spawn)")
+    except Exception as e:
+        print(f"Python: Disconnect completed (with exception: {e})")
     
     end_time = time.time()
     
