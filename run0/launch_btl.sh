@@ -1,9 +1,8 @@
 #!/bin/bash
-#SBATCH -D /users/addh496/sharedscratch/CaNS_DRL2.4/pz_guastoni0_highdim/run0
-#SBATCH -J pz_run0
-#SBATCH --nodes=4
-#!SBATCH --ntasks=64
-#SBATCH --ntasks-per-node=33
+#SBATCH -D /users/addh496/sharedscratch/CaNS_DRL2.4/pz_guastoni0_highdim/run0_550_opt
+#SBATCH -J pz550btl
+#SBATCH --nodes=6
+#SBATCH --ntasks-per-node=48
 #SBATCH --time=72:00:00
 #SBATCH --exclusive
 #SBATCH --output=R-%x.%j.out
@@ -62,19 +61,19 @@ mpirun \
   --mca btl openib,vader,self \
   --mca btl_openib_use_eager_rdma 1 \
   --mca btl_openib_eager_limit 32768 \
-  --mca btl_openib_rndv_eager_limit 32768 \
   --mca pml ob1 \
+  --mca btl_base_warn_component_unused 0 \
   --mca coll_tuned_use_dynamic_rules 1 \
-  --mca coll_tuned_allreduce_algorithm 1 \
   --mca coll_tuned_barrier_algorithm 1 \
-  --mca coll_tuned_bcast_algorithm 6 \
+  --mca coll_tuned_bcast_algorithm 1 \
+  --mca coll_tuned_reduce_algorithm 1 \
   --hostfile hostfile \
   --map-by node \
   --bind-to core \
   -n 1 \
   -x LD_LIBRARY_PATH \
   -x PYTHONPATH \
-  python evaluate_custom_grid.py ./checkpoints_pettingzoo_grid_shared/best_model.pt --grid_i 192 --grid_j 192 --episodes 5 --no_save
+  python evaluate_custom_grid.py ./checkpoints_pettingzoo_grid_shared/best_model.pt --grid_i 576 --grid_j 576 --episodes 5 --no_save --num_workers 32
   #python stw_utils_pettingzoo.py evaluate --config config.yaml --num_episodes 5 --policy_path ./checkpoints_pettingzoo_grid_shared/best_model.pt
   #python stwStart_pettingzoo.py 
   #python stw_utils_pettingzoo.py evaluate --config config.yaml --num_episodes 1 --policy_path ./checkpoints_pettingzoo_grid_shared/checkpoint_step_43200.pt
