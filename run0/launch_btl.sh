@@ -33,16 +33,6 @@ export PYTHONPATH=$(python -c "import sys; print(':'.join(sys.path))")
 # OpenMP settings
 export OMP_NUM_THREADS=1
 
-# UCX-specific settings
-export UCX_TLS=rc,dc,ud,sm,self
-export UCX_NET_DEVICES=mlx5_0:1
-export UCX_IB_TRAFFIC_CLASS=105
-export UCX_IB_GID_INDEX=3
-export UCX_IB_SL=3
-export UCX_RNDV_THRESH=8192
-export UCX_MAX_RNDV_RAILS=1
-export UCX_MEMTYPE_CACHE=n
-
 # OpenMPI settings for spawning
 export OMPI_MCA_rmaps_base_mapping_policy=node:PE=1
 export OMPI_MCA_rmaps_base_oversubscribe=1
@@ -69,27 +59,20 @@ echo "Node list: $SLURM_JOB_NODELIST"
 mpirun \
   --verbose \
   --mca plm_rsh_agent srun \
-  --mca btl tcp,vader,self \
-  --mca btl_tcp_if_include ib0 \
-  --mca oob_tcp_if_include ib0 \
+  --mca btl openib,vader,self \
+  --mca btl_openib_use_eager_rdma 1 \
+  --mca btl_openib_eager_limit 32768 \
+  --mca btl_openib_rndv_eager_limit 32768 \
   --mca pml ob1 \
   --mca coll_tuned_use_dynamic_rules 1 \
-  --mca coll_tuned_barrier_algorithm 3 \
-  --mca coll_tuned_bcast_algorithm 1 \
-  --mca coll_tuned_reduce_algorithm 2 \
+  --mca coll_tuned_allreduce_algorithm 1 \
+  --mca coll_tuned_barrier_algorithm 1 \
+  --mca coll_tuned_bcast_algorithm 6 \
   --hostfile hostfile \
   --map-by node \
-  --bind-to none \
+  --bind-to core \
   -n 1 \
   -x LD_LIBRARY_PATH \
-  -x UCX_TLS \
-  -x UCX_NET_DEVICES \
-  -x UCX_IB_TRAFFIC_CLASS \
-  -x UCX_IB_GID_INDEX \
-  -x UCX_IB_SL \
-  -x UCX_RNDV_THRESH \
-  -x UCX_MAX_RNDV_RAILS \
-  -x UCX_MEMTYPE_CACHE \
   -x PYTHONPATH \
   python evaluate_custom_grid.py ./checkpoints_pettingzoo_grid_shared/best_model.pt --grid_i 192 --grid_j 192 --episodes 5 --no_save
   #python stw_utils_pettingzoo.py evaluate --config config.yaml --num_episodes 5 --policy_path ./checkpoints_pettingzoo_grid_shared/best_model.pt
@@ -98,4 +81,3 @@ mpirun \
   #python debug.py
 # Clean up
 rm -f hostfile
-

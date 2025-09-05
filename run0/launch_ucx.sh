@@ -33,13 +33,13 @@ export PYTHONPATH=$(python -c "import sys; print(':'.join(sys.path))")
 # OpenMP settings
 export OMP_NUM_THREADS=1
 
-# UCX-specific settings
-export UCX_TLS=rc,dc,ud,sm,self
+# UCX-specific settings (optimized for mlx5_0)
+export UCX_TLS=rc_mlx5,dc_mlx5,ud_mlx5,sm,self
 export UCX_NET_DEVICES=mlx5_0:1
 export UCX_IB_TRAFFIC_CLASS=105
 export UCX_IB_GID_INDEX=3
 export UCX_IB_SL=3
-export UCX_RNDV_THRESH=8192
+export UCX_RNDV_THRESH=16384
 export UCX_MAX_RNDV_RAILS=1
 export UCX_MEMTYPE_CACHE=n
 
@@ -69,17 +69,11 @@ echo "Node list: $SLURM_JOB_NODELIST"
 mpirun \
   --verbose \
   --mca plm_rsh_agent srun \
-  --mca btl tcp,vader,self \
-  --mca btl_tcp_if_include ib0 \
-  --mca oob_tcp_if_include ib0 \
-  --mca pml ob1 \
-  --mca coll_tuned_use_dynamic_rules 1 \
-  --mca coll_tuned_barrier_algorithm 3 \
-  --mca coll_tuned_bcast_algorithm 1 \
-  --mca coll_tuned_reduce_algorithm 2 \
+  --mca pml ucx \
+  --mca btl ^vader,tcp,openib,uct \
   --hostfile hostfile \
   --map-by node \
-  --bind-to none \
+  --bind-to core \
   -n 1 \
   -x LD_LIBRARY_PATH \
   -x UCX_TLS \
@@ -98,4 +92,3 @@ mpirun \
   #python debug.py
 # Clean up
 rm -f hostfile
-
