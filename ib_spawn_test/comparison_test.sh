@@ -41,13 +41,22 @@ rm hostfile.tmp
 
 echo "--- TEST 1: SPAWN METHOD (Python spawns Fortran workers) ---"
 mpirun \
-  --mca btl tcp,self \
+  --mca plm_rsh_agent srun \
+  --mca btl tcp,vader,self \
   --mca btl_tcp_if_include ib0 \
+  --mca oob_tcp_if_include ib0 \
+  --mca pml ob1 \
+  --mca coll_tuned_use_dynamic_rules 1 \
+  --mca coll_tuned_barrier_algorithm 3 \
+  --mca coll_tuned_bcast_algorithm 1 \
+  --mca coll_tuned_reduce_algorithm 2 \
   --mca btl_base_warn_component_unused 0 \
-  --mca btl_base_verbose 0 \
   --hostfile hostfile \
-  --bind-to core \
+  --map-by node \
+  --bind-to none \
   -n 1 \
+  -x LD_LIBRARY_PATH \
+  -x PYTHONPATH \
   python python_spawn_test.py 2>&1 | grep -v -E "(mca:|btl:|select:|bml:)"
 
 echo ""
