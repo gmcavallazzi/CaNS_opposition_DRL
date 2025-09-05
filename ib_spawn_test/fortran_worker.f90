@@ -23,11 +23,13 @@ program fortran_worker
         local_result(i) = data(i) * sin(data(i)) * cos(data(i))
     enddo
     
-    ! Collective among Fortran workers
+    ! Collective among Fortran workers only
     call MPI_Allreduce(MPI_IN_PLACE, local_result, array_size, MPI_DOUBLE_PRECISION, MPI_SUM, MPI_COMM_WORLD, ierr)
     
-    ! Send result back to Python parent
-    call MPI_Reduce(local_result, local_result, array_size, MPI_DOUBLE_PRECISION, MPI_SUM, 0, parent_comm, ierr)
+    ! Only rank 0 sends result back to Python parent
+    if (rank == 0) then
+        call MPI_Send(local_result, array_size, MPI_DOUBLE_PRECISION, 0, 99, parent_comm, ierr)
+    endif
     
     deallocate(data, local_result)
     call MPI_Finalize(ierr)

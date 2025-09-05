@@ -21,8 +21,8 @@ def main():
     # Send data to workers
     worker_comm.Bcast(data, root=MPI.ROOT)
     
-    # Receive result from workers
-    worker_comm.Reduce(None, result, op=MPI.SUM, root=MPI.ROOT)
+    # Receive result from rank 0 of the workers
+    worker_comm.Recv(result, source=0, tag=99)
     
     # Clean up
     worker_comm.Disconnect()
