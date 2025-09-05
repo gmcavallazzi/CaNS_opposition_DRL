@@ -23,7 +23,7 @@ program test_spawn_child
     
     ! Test different message sizes (same as parent)
     integer, parameter :: num_tests = 4
-    integer, parameter :: test_sizes(num_tests) = [1024, 8192, 32768, 131072]
+    integer, parameter :: test_sizes(4) = [1024, 8192, 32768, 131072]
     integer :: i
     
     do i = 1, num_tests

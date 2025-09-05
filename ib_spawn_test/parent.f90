@@ -10,15 +10,15 @@ program test_spawn_parent
     character(len=20) :: child_exe = './child'
     character(len=1024) :: info_msg
     
+    ! Test different message sizes (in doubles)  
+    integer, parameter :: num_tests = 4
+    integer, parameter :: test_sizes(4) = [1024, 8192, 32768, 131072]
+    
     call MPI_Init(ierr)
     call MPI_Comm_rank(MPI_COMM_WORLD, rank, ierr)
     call MPI_Comm_size(MPI_COMM_WORLD, size, ierr)
     
     write(*,'(A,I0,A,I0)') 'Parent: rank ', rank, ' of ', size
-    
-    ! Test different message sizes (in doubles)
-    integer, parameter :: num_tests = 4
-    integer, parameter :: test_sizes(num_tests) = [1024, 8192, 32768, 131072]
     
     do i = 1, num_tests
         msg_size = test_sizes(i)
