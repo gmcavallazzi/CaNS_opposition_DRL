@@ -68,6 +68,7 @@ for config in "${configs[@]}"; do
       --mca oob_tcp_if_include ib0 \
       --mca pml ob1 \
       --mca btl_base_warn_component_unused 0 \
+      --mca btl_base_verbose 0 \
       --mca coll_tuned_use_dynamic_rules 1 \
       --mca coll_tuned_barrier_algorithm 1 \
       --mca coll_tuned_bcast_algorithm 1 \
@@ -77,7 +78,7 @@ for config in "${configs[@]}"; do
       --bind-to core \
       -n 1 \
       -x LD_LIBRARY_PATH \
-      ./intensive_parent 2>&1 | tee spawn_${total_procs}_${matrix_size}.log
+      ./intensive_parent 2>&1 | grep -v -E "(mca:|btl:|select:|bml:)" | tee spawn_${total_procs}_${matrix_size}.log
     
     if [ ${PIPESTATUS[0]} -eq 124 ]; then
         echo "SPAWN TEST TIMED OUT (>10 minutes)"
@@ -95,6 +96,7 @@ for config in "${configs[@]}"; do
       --mca oob_tcp_if_include ib0 \
       --mca pml ob1 \
       --mca btl_base_warn_component_unused 0 \
+      --mca btl_base_verbose 0 \
       --mca coll_tuned_use_dynamic_rules 1 \
       --mca coll_tuned_barrier_algorithm 1 \
       --mca coll_tuned_bcast_algorithm 1 \
@@ -104,7 +106,7 @@ for config in "${configs[@]}"; do
       --bind-to core \
       -n ${total_procs} \
       -x LD_LIBRARY_PATH \
-      ./persistent_workers 2>&1 | tee persistent_${total_procs}_${matrix_size}.log
+      ./persistent_workers 2>&1 | grep -v -E "(mca:|btl:|select:|bml:)" | tee persistent_${total_procs}_${matrix_size}.log
     
     if [ ${PIPESTATUS[0]} -eq 124 ]; then
         echo "PERSISTENT TEST TIMED OUT (>10 minutes)"
