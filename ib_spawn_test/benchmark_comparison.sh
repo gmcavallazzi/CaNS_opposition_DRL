@@ -49,36 +49,63 @@ for config in "${configs[@]}"; do
     echo "Configuration: ${total_procs} cores, ${matrix_size}x${matrix_size} matrix, ${episodes} episodes"
     echo "==========================================="
     
-    # Test 1: Spawn-based approach (with TCP/IB fallback)
+    # Test 1: Spawn-based approach (using your working settings)
     echo ""
     echo "--- TEST 1: SPAWN-BASED (current approach) ---"
     echo "Parent procs: 1, Child procs: ${child_procs}"
     
+    # Create hostfile for spawning (same as your working setup)
+    scontrol show hostnames $SLURM_JOB_NODELIST > hostfile.tmp
+    while read node; do
+        echo "$node slots=16"
+    done < hostfile.tmp > hostfile
+    rm hostfile.tmp
+    
     timeout 600s mpirun \
+      --verbose \
+      --mca plm_rsh_agent srun \
       --mca btl tcp,vader,self \
       --mca btl_tcp_if_include ib0 \
+      --mca oob_tcp_if_include ib0 \
       --mca pml ob1 \
       --mca btl_base_warn_component_unused 0 \
+      --mca coll_tuned_use_dynamic_rules 1 \
+      --mca coll_tuned_barrier_algorithm 1 \
+      --mca coll_tuned_bcast_algorithm 1 \
+      --mca coll_tuned_reduce_algorithm 1 \
+      --hostfile hostfile \
+      --map-by node \
       --bind-to core \
       -n 1 \
+      -x LD_LIBRARY_PATH \
       ./intensive_parent 2>&1 | tee spawn_${total_procs}_${matrix_size}.log
     
     if [ ${PIPESTATUS[0]} -eq 124 ]; then
         echo "SPAWN TEST TIMED OUT (>10 minutes)"
     fi
     
-    # Test 2: Persistent worker approach
+    # Test 2: Persistent worker approach (also with same settings for fairness)
     echo ""
     echo "--- TEST 2: PERSISTENT WORKERS (proposed approach) ---" 
     echo "Controller procs: 1, Worker procs: ${child_procs}"
     
     timeout 600s mpirun \
+      --verbose \
+      --mca plm_rsh_agent srun \
       --mca btl tcp,vader,self \
       --mca btl_tcp_if_include ib0 \
+      --mca oob_tcp_if_include ib0 \
       --mca pml ob1 \
       --mca btl_base_warn_component_unused 0 \
+      --mca coll_tuned_use_dynamic_rules 1 \
+      --mca coll_tuned_barrier_algorithm 1 \
+      --mca coll_tuned_bcast_algorithm 1 \
+      --mca coll_tuned_reduce_algorithm 1 \
+      --hostfile hostfile \
+      --map-by node \
       --bind-to core \
       -n ${total_procs} \
+      -x LD_LIBRARY_PATH \
       ./persistent_workers 2>&1 | tee persistent_${total_procs}_${matrix_size}.log
     
     if [ ${PIPESTATUS[0]} -eq 124 ]; then
@@ -108,8 +135,11 @@ done
 echo ""
 echo "=== BENCHMARK COMPLETED ==="
 echo ""
+# Clean up hostfile
+rm -f hostfile
+
 echo "Summary logs created:"
-ls -la *_${SLURM_JOB_ID}_*.log 2>/dev/null || echo "No detailed logs found"
+ls -la spawn_*.log persistent_*.log 2>/dev/null || echo "No detailed logs found"
 
 echo ""
 echo "Key findings:"
