@@ -4,7 +4,7 @@ program fortran_worker
     
     type(MPI_Comm) :: parent_comm
     integer :: rank, size, ierr
-    integer, parameter :: array_size = 50000
+    integer, parameter :: array_size = 500000
     real(8), allocatable :: data(:), local_result(:)
     integer :: i
     

@@ -9,10 +9,10 @@ def main():
     size = comm.Get_size()
     
     if rank == 0:
-        print("=== PERSISTENT TEST: Python controller with pre-allocated Fortran workers ===")
+        print("=== PERSISTENT TEST: Python controller with pre-allocated workers ===")
         
-        # Data to send to workers
-        data = np.full(50000, 3.14, dtype=np.float64)
+        # Data to send to workers (larger for multi-node test)
+        data = np.full(500000, 3.14, dtype=np.float64)
         result = np.zeros_like(data)
         
         start_time = time.time()
@@ -35,9 +35,9 @@ def main():
         print(f"Persistent total time: {(end_time - start_time)*1000:.3f} ms")
     
     else:
-        # Worker process (Python ranks 1-8)
+        # Worker process (Python ranks 1-64)
         # Receive data from controller
-        data = np.empty(50000, dtype=np.float64)
+        data = np.empty(500000, dtype=np.float64)
         comm.Bcast(data, root=0)
         
         # Wait for compute signal

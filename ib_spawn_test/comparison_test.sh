@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH -D /users/addh496/sharedscratch/CaNS_DRL2.4/pz_guastoni0_highdim/ib_spawn_test
 #SBATCH -J python_fortran_test
-#SBATCH --nodes=1
+#SBATCH --nodes=2
 #SBATCH --ntasks-per-node=48
 #SBATCH --time=10:00
 #SBATCH --exclusive
@@ -73,7 +73,7 @@ mpirun \
   --mca mca_verbose 0 \
   --hostfile hostfile \
   --bind-to core \
-  -n 9 \
+  -n 65 \
   python python_persistent_test.py
 
 # Clean up

@@ -10,15 +10,15 @@ def main():
     print("=== SPAWN TEST: Python controller spawns Fortran workers ===")
     print("Python: Starting spawn test...")
     
-    # Data to send to workers
-    data = np.full(50000, 3.14, dtype=np.float64)
+    # Data to send to workers (larger for multi-node test)
+    data = np.full(500000, 3.14, dtype=np.float64)
     result = np.zeros_like(data)
     
     start_time = time.time()
     
-    print("Python: About to spawn 8 Fortran workers...")
-    # Spawn 8 Fortran workers
-    worker_comm = MPI.COMM_WORLD.Spawn('./fortran_worker', args=[], maxprocs=8)
+    print("Python: About to spawn 64 Fortran workers...")
+    # Spawn 64 Fortran workers (should distribute across 2 nodes)
+    worker_comm = MPI.COMM_WORLD.Spawn('./fortran_worker', args=[], maxprocs=64)
     print("Python: Workers spawned successfully")
     
     print("Python: Broadcasting data to workers...")
