@@ -10,8 +10,8 @@ def main():
     print("=== SPAWN TEST: Python controller spawns Fortran workers ===")
     print("Python: Starting spawn test...")
     
-    # Data to send to workers (larger for multi-node test)
-    data = np.full(500000, 3.14, dtype=np.float64)
+    # Data to send to workers (much larger for multi-node test)
+    data = np.full(10000000, 3.14, dtype=np.float64)
     result = np.zeros_like(data)
     
     start_time = time.time()
