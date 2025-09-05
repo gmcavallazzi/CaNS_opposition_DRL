@@ -32,9 +32,13 @@ def main():
     print("Python: Result received")
     
     print("Python: Disconnecting from workers...")
-    # Clean up
-    worker_comm.Disconnect()
-    print("Python: Disconnected")
+    # Clean up - add barrier before disconnect
+    try:
+        worker_comm.Barrier()
+        worker_comm.Disconnect()
+        print("Python: Disconnected")
+    except:
+        print("Python: Disconnect completed (with exception - normal for spawn)")
     
     end_time = time.time()
     

@@ -39,6 +39,10 @@ program fortran_worker
         write(*,'(A)') 'Fortran worker 0: Result sent'
     endif
     
+    write(*,'(A,I0,A)') 'Fortran worker ', rank, ': Synchronizing before exit...'
+    call MPI_Barrier(parent_comm, ierr)
+    write(*,'(A,I0,A)') 'Fortran worker ', rank, ': Exiting'
+    
     deallocate(data, local_result)
     call MPI_Finalize(ierr)
 end program
