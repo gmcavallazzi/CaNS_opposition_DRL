@@ -364,10 +364,12 @@ class STWParallelEnvCustom(ParallelEnv):
         
         self.common_comm.Send([amp_send, MPI.DOUBLE], dest=1, tag=1)
         
-        # Receive observation data from CaNS (unchanged)
+        # Receive observation data from CaNS (must match Fortran send order!)
         print(f"PYTHON: About to receive observation data from CaNS for {self.grid_i}x{self.grid_j} grid")
         self.u_obs_all = np.zeros((self.grid_i, self.grid_j), dtype=np.float64)
         self.w_obs_all = np.zeros((self.grid_i, self.grid_j), dtype=np.float64)
+        self.p_obs_all = np.zeros((self.grid_i, self.grid_j), dtype=np.float64)
+        self.t_obs_all = np.zeros((self.grid_i, self.grid_j), dtype=np.float64)
         self.dpdx = np.array(0.0, dtype=np.float64)
         
         print("PYTHON: Receiving u_obs_all from CaNS...")
@@ -377,6 +379,14 @@ class STWParallelEnvCustom(ParallelEnv):
         print("PYTHON: Receiving w_obs_all from CaNS...")
         self.common_comm.Recv([self.w_obs_all, MPI.DOUBLE], source=1, tag=9)
         print(f"PYTHON: Received w_obs_all, shape={self.w_obs_all.shape}, range=[{np.min(self.w_obs_all):.6f}, {np.max(self.w_obs_all):.6f}]")
+        
+        print("PYTHON: Receiving p_obs_all from CaNS...")
+        self.common_comm.Recv([self.p_obs_all, MPI.DOUBLE], source=1, tag=8)
+        print(f"PYTHON: Received p_obs_all, shape={self.p_obs_all.shape}, range=[{np.min(self.p_obs_all):.6f}, {np.max(self.p_obs_all):.6f}]")
+        
+        print("PYTHON: Receiving t_obs_all from CaNS...")
+        self.common_comm.Recv([self.t_obs_all, MPI.DOUBLE], source=1, tag=7)
+        print(f"PYTHON: Received t_obs_all, shape={self.t_obs_all.shape}, range=[{np.min(self.t_obs_all):.6f}, {np.max(self.t_obs_all):.6f}]")
         
         print("PYTHON: Receiving dpdx from CaNS...")
         self.common_comm.Recv([self.dpdx, MPI.DOUBLE], source=1, tag=4)
