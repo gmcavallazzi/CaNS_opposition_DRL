@@ -365,39 +365,62 @@ class STWParallelEnvCustom(ParallelEnv):
         self.common_comm.Send([amp_send, MPI.DOUBLE], dest=1, tag=1)
         
         # Receive observation data from CaNS (unchanged)
+        print(f"PYTHON: About to receive observation data from CaNS for {self.grid_i}x{self.grid_j} grid")
         self.u_obs_all = np.zeros((self.grid_i, self.grid_j), dtype=np.float64)
         self.w_obs_all = np.zeros((self.grid_i, self.grid_j), dtype=np.float64)
         self.dpdx = np.array(0.0, dtype=np.float64)
         
+        print("PYTHON: Receiving u_obs_all from CaNS...")
         self.common_comm.Recv([self.u_obs_all, MPI.DOUBLE], source=1, tag=5)
+        print(f"PYTHON: Received u_obs_all, shape={self.u_obs_all.shape}, range=[{np.min(self.u_obs_all):.6f}, {np.max(self.u_obs_all):.6f}]")
+        
+        print("PYTHON: Receiving w_obs_all from CaNS...")
         self.common_comm.Recv([self.w_obs_all, MPI.DOUBLE], source=1, tag=9)
+        print(f"PYTHON: Received w_obs_all, shape={self.w_obs_all.shape}, range=[{np.min(self.w_obs_all):.6f}, {np.max(self.w_obs_all):.6f}]")
+        
+        print("PYTHON: Receiving dpdx from CaNS...")
         self.common_comm.Recv([self.dpdx, MPI.DOUBLE], source=1, tag=4)
+        print(f"PYTHON: Received dpdx = {self.dpdx}")
+        print("PYTHON: All CaNS data received successfully!")
         
         if self.save_images:
             self._save_raw_observations_images(self.u_obs_all, self.w_obs_all)
         
         # Process observations (unchanged)
+        print("PYTHON: Processing observations...")
         u_mean = np.mean(self.u_obs_all)
+        print(f"PYTHON: u_mean = {u_mean}")
         self.u_obs_mat = (self.u_obs_all - u_mean) / self.config['action']['om_max']
+        print(f"PYTHON: u_obs_mat processed, range=[{np.min(self.u_obs_mat):.6f}, {np.max(self.u_obs_mat):.6f}]")
         
         w_mean = np.mean(self.w_obs_all)
+        print(f"PYTHON: w_mean = {w_mean}")
         self.w_obs_mat = (self.w_obs_all - w_mean) / self.config['action']['om_max']
+        print(f"PYTHON: w_obs_mat processed, range=[{np.min(self.w_obs_mat):.6f}, {np.max(self.w_obs_mat):.6f}]")
+        print(f"PYTHON: om_max = {self.config['action']['om_max']}")
         
         # Store initial observation if needed
         if not self.initial_obs_captured and self.total_steps == 0:
             self.initial_u_obs_mat = self.u_obs_mat.copy()
             self.initial_w_obs_mat = self.w_obs_mat.copy()
             self.initial_obs_captured = True
-            print("Initial observation captured for future resets")
+            print("PYTHON: Initial observation captured for future resets")
         
         # Compute global reward
+        print("PYTHON: Computing global reward...")
         global_reward = float(compute_reward(self.dpdx, self.config))
+        print(f"PYTHON: Global reward = {global_reward}")
         
         # Process agents in parallel for observations
+        print(f"PYTHON: Processing agents - using {self.num_workers} workers")
         if self.num_workers > 0:
+            print("PYTHON: Starting parallel agent processing...")
             observations = self._process_agents_parallel(self.u_obs_mat, self.w_obs_mat)
+            print("PYTHON: Parallel agent processing complete!")
         else:
+            print("PYTHON: Starting sequential agent processing...")
             observations = self._process_agents_sequential(self.u_obs_mat, self.w_obs_mat)
+            print("PYTHON: Sequential agent processing complete!")
         
         # Create other dictionaries
         rewards = {}
