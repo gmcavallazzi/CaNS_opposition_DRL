@@ -33,8 +33,8 @@ export PYTHONPATH=$(python -c "import sys; print(':'.join(sys.path))")
 # OpenMP settings
 export OMP_NUM_THREADS=1
 
-# UCX-specific settings (optimized for mlx5_0)
-export UCX_TLS=rc_mlx5,dc_mlx5,ud_mlx5,sm,self
+# UCX-specific settings (optimized for mlx5_0, spawn-safe)
+export UCX_TLS=rc_verbs,ud_verbs,sm,self
 export UCX_NET_DEVICES=mlx5_0:1
 export UCX_IB_TRAFFIC_CLASS=105
 export UCX_IB_GID_INDEX=3
@@ -42,6 +42,7 @@ export UCX_IB_SL=3
 export UCX_RNDV_THRESH=16384
 export UCX_MAX_RNDV_RAILS=1
 export UCX_MEMTYPE_CACHE=n
+export UCX_UNIFIED_MODE=n
 
 # OpenMPI settings for spawning
 export OMPI_MCA_rmaps_base_mapping_policy=node:PE=1
