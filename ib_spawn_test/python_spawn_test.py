@@ -8,6 +8,7 @@ def main():
     rank = comm.Get_rank()
     
     print("=== SPAWN TEST: Python controller spawns Fortran workers ===")
+    print("Python: Starting spawn test...")
     
     # Data to send to workers
     data = np.full(50000, 3.14, dtype=np.float64)
@@ -15,17 +16,25 @@ def main():
     
     start_time = time.time()
     
+    print("Python: About to spawn 8 Fortran workers...")
     # Spawn 8 Fortran workers
     worker_comm = MPI.COMM_WORLD.Spawn('./fortran_worker', args=[], maxprocs=8)
+    print("Python: Workers spawned successfully")
     
+    print("Python: Broadcasting data to workers...")
     # Send data to workers
     worker_comm.Bcast(data, root=MPI.ROOT)
+    print("Python: Data broadcast complete")
     
+    print("Python: Waiting for result from worker rank 0...")
     # Receive result from rank 0 of the workers
     worker_comm.Recv(result, source=0, tag=99)
+    print("Python: Result received")
     
+    print("Python: Disconnecting from workers...")
     # Clean up
     worker_comm.Disconnect()
+    print("Python: Disconnected")
     
     end_time = time.time()
     
