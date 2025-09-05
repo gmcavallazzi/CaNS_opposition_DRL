@@ -11,7 +11,7 @@
 module load compilers/gcc/11.2.0
 module load mpi/openmpi/4.1.1
 
-# Conda setup
+# Conda setup.
 __conda_setup="$('/users/addh496/sharedscratch/anaconda3/bin/conda' 'shell.bash' 'hook' 2> /dev/null)"
 if [ $? -eq 0 ]; then
     eval "$__conda_setup"
