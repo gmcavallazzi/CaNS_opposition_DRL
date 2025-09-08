@@ -75,6 +75,12 @@ if [ -d "$SOURCE_DIR/data" ]; then
         echo "Copied data/*.gnuplot files"
     fi
     
+    # Copy best_model file from checkpoint*
+    if ls "$SOURCE_DIR/checkpoints_pettingzoo_grid_shared"/best_model.pt 1> /dev/null 2>&1; then
+        cp "$SOURCE_DIR/checkpoints_pettingzoo_grid_shared"/best_model.pt "$DEST_DIR/checkpoints_pettingzoo_grid_shared/" 2>/dev/null
+        echo "Copied best_model file"
+    fi
+    
     # Copy *.sh files from data
     if ls "$SOURCE_DIR/data"/*.sh 1> /dev/null 2>&1; then
         cp "$SOURCE_DIR/data"/*.sh "$DEST_DIR/data/" 2>/dev/null
