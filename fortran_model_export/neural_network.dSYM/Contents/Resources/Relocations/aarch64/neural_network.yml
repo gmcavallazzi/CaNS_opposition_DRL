@@ -1,0 +1,7 @@
+---
+triple:          'arm64-apple-darwin'
+binary-path:     neural_network
+relocations:
+  - { offset: 0x55, size: 0x8, addend: 0x0, symName: _main, symObjAddr: 0x1340, symBinAddr: 0x100001740, symSize: 0x2C }
+  - { offset: 0x9E, size: 0x8, addend: 0x0, symName: _MAIN__, symObjAddr: 0x0, symBinAddr: 0x1000006C0, symSize: 0x106C }
+...
