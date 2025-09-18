@@ -3,10 +3,9 @@ from mpi4py import MPI
 import gymnasium as gym
 from gymnasium import spaces
 from pettingzoo import ParallelEnv
-from utils import load_config, compute_reward
+from utils import load_config, compute_reward, compute_diversity_penalty
 import os
 import matplotlib.pyplot as plt
-from scipy.interpolate import RegularGridInterpolator
 
 class STWParallelEnv(ParallelEnv):
     metadata = {"render_modes": ["human", "rgb_array"], "name": "stw_v0"}
@@ -38,6 +37,7 @@ class STWParallelEnv(ParallelEnv):
 
         # Cache frequently accessed config values
         self.om_max = self.config['action']['om_max']
+        self.action_scaling_factor = self.config['action']['scaling_factor']
         
     
         # Setup observation and action spaces
@@ -184,7 +184,7 @@ class STWParallelEnv(ParallelEnv):
         self.last_action = actions
         
         # Send actions to simulation - this is what goes to CaNS
-        amp_send = np.double(action_matrix * self.om_max * 2)
+        amp_send = np.double(action_matrix * self.om_max * self.action_scaling_factor)
         
         
         self.common_comm.Send([amp_send, MPI.DOUBLE], dest=1, tag=1)
@@ -225,7 +225,10 @@ class STWParallelEnv(ParallelEnv):
 
         # Compute global reward component
         global_reward = float(compute_reward(self.dpdx, self.config))
-        
+
+        # Compute diversity penalty to encourage action variation
+        diversity_penalty = compute_diversity_penalty(actions, self.config)
+
         # Create observations, rewards, terminations, truncations, infos dictionaries
         observations = {}
         rewards = {}
@@ -239,8 +242,8 @@ class STWParallelEnv(ParallelEnv):
             # Get local observation
             observations[agent] = self.get_local_observation(self.u_obs_mat, self.w_obs_mat, i, j)
                 
-            # Combine global and local rewards
-            rewards[agent] = self.config['reward']['global_weight'] * global_reward 
+            # Combine global reward and diversity penalty
+            rewards[agent] = self.config['reward']['global_weight'] * global_reward + diversity_penalty 
                 
             terminations[agent] = self.current_step >= self.episode_length
             truncations[agent] = False
@@ -248,7 +251,8 @@ class STWParallelEnv(ParallelEnv):
                 'dpdx': float(self.dpdx),
                 'step': self.current_step,
                 'total_steps': self.total_steps,
-                'global_reward': global_reward
+                'global_reward': global_reward,
+                'diversity_penalty': diversity_penalty
             }
         
         # Update step counters
@@ -301,28 +305,35 @@ class STWParallelEnv(ParallelEnv):
         return local_obs
 
     def shift_field_subgrid(self, x, y, field, dx_shift):
-        """Shift field by dx_shift using subgrid interpolation"""
+        """Shift field by dx_shift using numpy-based interpolation with periodic boundaries"""
         nx, ny = field.shape
-        Lx = x[-1] - x[0] + (x[1] - x[0])  # Add one grid spacing for correct domain size
+        dx = x[1] - x[0]  # Grid spacing in x direction
+        Lx = x[-1] - x[0] + dx  # Domain length
 
-        # Create interpolator
-        interp = RegularGridInterpolator((x, y), field,
-                                       bounds_error=False,
-                                       fill_value=None,  # Use nearest for out-of-bounds
-                                       method='linear')
+        # Calculate shift in grid units
+        shift_grid_units = dx_shift / dx
 
-        # Create shifted coordinates (with periodic boundary conditions)
-        X, Y = np.meshgrid(x, y, indexing='ij')
-        X_shifted = X - dx_shift
+        # Create result array
+        field_shifted = np.zeros_like(field)
 
-        # Handle periodic boundaries
-        X_shifted = X_shifted % Lx
+        # For each grid point, interpolate from shifted position
+        for i in range(nx):
+            for j in range(ny):
+                # Calculate source position (shifted backwards)
+                source_x_continuous = i - shift_grid_units
 
-        # Create points for interpolation
-        points = np.column_stack([X_shifted.ravel(), Y.ravel()])
+                # Handle periodic boundaries
+                source_x_continuous = source_x_continuous % nx
 
-        # Interpolate
-        field_shifted = interp(points).reshape(nx, ny)
+                # Bilinear interpolation indices
+                i1 = int(np.floor(source_x_continuous)) % nx
+                i2 = (i1 + 1) % nx
+
+                # Interpolation weight
+                wx = source_x_continuous - np.floor(source_x_continuous)
+
+                # Linear interpolation in x direction (y stays the same)
+                field_shifted[i, j] = (1 - wx) * field[i1, j] + wx * field[i2, j]
 
         return field_shifted
 
@@ -376,3 +387,4 @@ class STWParallelEnv(ParallelEnv):
     def set_episode_length(self, episode_length):
         """Set the episode length for curriculum learning."""
         self.episode_length = episode_length
+
