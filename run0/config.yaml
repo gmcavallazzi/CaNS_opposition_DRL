@@ -2,7 +2,7 @@
 n_actions: 1800
 n_actuations: 1800
 total_timesteps: 1800000  # n_actions * 400
-maxprocs: [144]
+maxprocs: [64]
 halo: 0
 
 # Network architecture
@@ -34,13 +34,21 @@ model:
   learning_rate: 0.001
   buffer_size: 5_000_000
   weight_decay: 0.00001  # Add L2 regularization
-  batch_size: 64
+  batch_size: 32
   tau: 0.01
   gamma: 0.995
   train_freq: 300
   gradient_steps: 64
   action_noise:
-    sigma: 0.0064
+    sigma: 0.02
+
+# Field shift parameters
+field_shift:
+  enable: true
+  dt: 0.0765  # Time step for shifting
+  domain_size:
+    Lx: 2.67  # Domain length in x direction
+    Ly: 0.8   # Domain length in y direction
 
 # Training parameters
 training:

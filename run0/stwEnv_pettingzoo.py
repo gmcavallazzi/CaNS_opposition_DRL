@@ -6,6 +6,7 @@ from pettingzoo import ParallelEnv
 from utils import load_config, compute_reward, compute_local_reward, img_rescale, rescale_amp
 import os
 import matplotlib.pyplot as plt
+from scipy.interpolate import RegularGridInterpolator
 
 class STWParallelEnv(ParallelEnv):
     metadata = {"render_modes": ["human", "rgb_array"], "name": "stw_v0"}
@@ -71,6 +72,13 @@ class STWParallelEnv(ParallelEnv):
         self.initial_obs_captured = False
         self.initial_u_obs_mat = None
         self.initial_w_obs_mat = None
+
+        # Initialize field shift coordinates if enabled
+        if self.config.get('field_shift', {}).get('enable', False):
+            Lx = self.config['field_shift']['domain_size']['Lx']
+            Ly = self.config['field_shift']['domain_size']['Ly']
+            self.shift_x = np.linspace(0, Lx, self.grid_i, endpoint=False)
+            self.shift_y = np.linspace(0, Ly, self.grid_j, endpoint=False)
 
     def _setup_spaces(self):
         """Set up the observation and action spaces for agents."""
@@ -226,7 +234,14 @@ class STWParallelEnv(ParallelEnv):
             self.initial_w_obs_mat = self.w_obs_mat.copy()
             self.initial_obs_captured = True
             print("Initial observation captured for future resets")
-        
+
+        # Apply field shifting if enabled
+        if self.config.get('field_shift', {}).get('enable', False):
+            u_avg = np.mean(self.u_obs_mat)
+            dx_shift = u_avg * self.config['field_shift']['dt']
+            self.u_obs_mat = self.shift_field_subgrid(self.shift_x, self.shift_y, self.u_obs_mat, dx_shift)
+            self.w_obs_mat = self.shift_field_subgrid(self.shift_x, self.shift_y, self.w_obs_mat, dx_shift)
+
         # Compute global reward component
         global_reward = float(compute_reward(self.dpdx, self.config))
         
@@ -378,9 +393,35 @@ class STWParallelEnv(ParallelEnv):
                     local_obs[local_i, local_j, 0] = u_obs[obs_i, obs_j] * om_max
                     # Second channel: w velocity, directly multiplied by om_max
                     local_obs[local_i, local_j, 1] = w_obs[obs_i, obs_j] * om_max
-                
+
         return local_obs
-    
+
+    def shift_field_subgrid(self, x, y, field, dx_shift):
+        """Shift field by dx_shift using subgrid interpolation"""
+        nx, ny = field.shape
+        Lx = x[-1] - x[0] + (x[1] - x[0])  # Add one grid spacing for correct domain size
+
+        # Create interpolator
+        interp = RegularGridInterpolator((x, y), field,
+                                       bounds_error=False,
+                                       fill_value=None,  # Use nearest for out-of-bounds
+                                       method='linear')
+
+        # Create shifted coordinates (with periodic boundary conditions)
+        X, Y = np.meshgrid(x, y, indexing='ij')
+        X_shifted = X - dx_shift
+
+        # Handle periodic boundaries
+        X_shifted = X_shifted % Lx
+
+        # Create points for interpolation
+        points = np.column_stack([X_shifted.ravel(), Y.ravel()])
+
+        # Interpolate
+        field_shifted = interp(points).reshape(nx, ny)
+
+        return field_shifted
+
     def _check_simulation_end(self):
         """Check simulation state and handle MPI communication."""
         data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
