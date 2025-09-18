@@ -1,9 +1,11 @@
 run/__pycache__/
+run0/__pycache__/
 *.pyc
 *.pyo
 *.pyd
 *.pyw
 *.pyz
+*.DS_*
 
 # project specific directories
 build/
