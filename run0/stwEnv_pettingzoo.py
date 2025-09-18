@@ -184,7 +184,7 @@ class STWParallelEnv(ParallelEnv):
         self.last_action = actions
         
         # Send actions to simulation - this is what goes to CaNS
-        amp_send = np.double(action_matrix * self.om_max)
+        amp_send = np.double(action_matrix * self.om_max * 2)
         
         
         self.common_comm.Send([amp_send, MPI.DOUBLE], dest=1, tag=1)
