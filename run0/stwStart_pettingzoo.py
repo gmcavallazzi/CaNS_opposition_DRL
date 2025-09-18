@@ -116,6 +116,9 @@ def train_maddpg(
         device=device,
         pi_arch=config.get('net_arch', {}).get('pi', [64, 64]),
         qf_arch=config.get('net_arch', {}).get('qf', [64, 64, 64]),
+        qf_conv=config.get('net_arch', {}).get('qf_conv', None),
+        qf_mlp=config.get('net_arch', {}).get('qf_mlp', None),
+        grid_size=config['grid']['target']['i'],  # Assuming square grid
         gradient_clip=config['training']['gradient_clip'],
         xavier_init_gain=config['training']['xavier_init_gain']
     )

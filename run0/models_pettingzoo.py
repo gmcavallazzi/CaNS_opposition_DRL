@@ -130,6 +130,108 @@ class MLPCritic(nn.Module):
         x = self.net(x)
         return self.output_layer(x)
 
+# Convolutional critic for spatial data
+class ConvCritic(nn.Module):
+    """
+    Convolutional critic network for processing spatial 2D fields.
+    Designed for 64x64 grids with 2 channels (u, w velocity fields).
+    """
+    def __init__(self, grid_size: int = 64, conv_channels: List[int] = None,
+                 mlp_layers: List[int] = None, dropout_rate: float = 0.05):
+        super().__init__()
+
+        self.grid_size = grid_size
+
+        # Default architectures
+        if conv_channels is None:
+            conv_channels = [32, 64, 32]  # 3 conv layers
+        if mlp_layers is None:
+            mlp_layers = [256, 128]  # 2 MLP layers
+
+        # Convolutional layers for spatial processing
+        conv_layers = []
+        in_channels = 3  # 2 for observations (u,w) + 1 for actions
+
+        for out_channels in conv_channels:
+            conv_layers.extend([
+                nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
+                nn.BatchNorm2d(out_channels),
+                nn.ReLU(),
+                nn.MaxPool2d(2, 2),  # Reduce spatial dimensions by 2
+                nn.Dropout2d(dropout_rate)
+            ])
+            in_channels = out_channels
+
+        self.conv_net = nn.Sequential(*conv_layers)
+
+        # Calculate flattened size after convolutions
+        # After 3 pooling operations: 64 -> 32 -> 16 -> 8
+        final_spatial_size = grid_size // (2 ** len(conv_channels))
+        conv_output_size = conv_channels[-1] * (final_spatial_size ** 2)
+
+        # MLP layers for final processing
+        mlp_layers_full = []
+        prev_dim = conv_output_size
+
+        # Add layer normalization after flattening
+        mlp_layers_full.append(nn.LayerNorm(prev_dim))
+
+        for h_dim in mlp_layers:
+            mlp_layers_full.extend([
+                nn.Linear(prev_dim, h_dim),
+                nn.LayerNorm(h_dim),
+                nn.ReLU(),
+                nn.Dropout(dropout_rate)
+            ])
+            prev_dim = h_dim
+
+        # Output layer
+        self.output_layer = nn.Linear(prev_dim, 1)
+        self.mlp_net = nn.Sequential(*mlp_layers_full)
+
+        # Initialize weights
+        self.apply(self._init_weights)
+
+    def _init_weights(self, module):
+        if isinstance(module, (nn.Linear, nn.Conv2d)):
+            if module == self.output_layer:  # Output layer
+                nn.init.uniform_(module.weight, -0.003, 0.003)
+                if module.bias is not None:
+                    nn.init.uniform_(module.bias, -0.003, 0.003)
+            else:  # Hidden layers
+                nn.init.xavier_uniform_(module.weight, gain=1.5)
+                if module.bias is not None:
+                    nn.init.constant_(module.bias, 0.0)
+        elif isinstance(module, (nn.LayerNorm, nn.BatchNorm2d)):
+            nn.init.constant_(module.weight, 1.0)
+            nn.init.constant_(module.bias, 0.0)
+
+    def forward(self, obs_fields: torch.Tensor, act_field: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass for convolutional critic.
+
+        Args:
+            obs_fields: [batch_size, 2, grid_size, grid_size] - u,w velocity fields
+            act_field: [batch_size, 1, grid_size, grid_size] - action field
+
+        Returns:
+            Q-values: [batch_size, 1]
+        """
+        # Combine observations and actions: [batch_size, 3, 64, 64]
+        x = torch.cat([obs_fields, act_field], dim=1)
+
+        # Apply convolutional layers
+        x = self.conv_net(x)
+
+        # Flatten for MLP
+        x = x.view(x.size(0), -1)
+
+        # Apply MLP layers
+        x = self.mlp_net(x)
+
+        # Output Q-value
+        return self.output_layer(x)
+
 class SharedPolicyMADDPG:
     """
     Multi-Agent Deep Deterministic Policy Gradient with shared policies.
@@ -148,6 +250,9 @@ class SharedPolicyMADDPG:
         device: str = "cpu",
         pi_arch: List[int] = None,
         qf_arch: List[int] = None,
+        qf_conv: List[int] = None,  # Conv architecture for spatial critic
+        qf_mlp: List[int] = None,   # MLP architecture for spatial critic
+        grid_size: int = 64,        # Grid size for spatial data
         gradient_clip: float = 1.0,
         xavier_init_gain: float = 1.5
     ):
@@ -161,21 +266,39 @@ class SharedPolicyMADDPG:
         self.weight_decay = weight_decay
         self.gradient_clip = gradient_clip
         self.xavier_init_gain = xavier_init_gain
-        
+        self.grid_size = grid_size
+
         # Network architectures
         if pi_arch is None:
             pi_arch = [128, 64, 32]  # Updated architecture
         if qf_arch is None:
             qf_arch = [128, 64, 32]  # Updated architecture
-            
-        print(f"Using MLP networks for all agents")
-        print(f"Actor architecture: {pi_arch}")
-        print(f"Critic architecture: {qf_arch}")
+
+        # Determine if using convolutional critic
+        self.use_conv_critic = qf_conv is not None
+
+        if self.use_conv_critic:
+            if qf_mlp is None:
+                qf_mlp = [256, 128]  # Default MLP layers for conv critic
+            print(f"Using ConvCritic for spatial processing")
+            print(f"Conv channels: {qf_conv}")
+            print(f"MLP layers: {qf_mlp}")
+            print(f"Grid size: {grid_size}")
+        else:
+            print(f"Using MLP networks for all agents")
+            print(f"Actor architecture: {pi_arch}")
+            print(f"Critic architecture: {qf_arch}")
+
         # Create networks
         self.actor = MLPActor(obs_shape, act_shape, dropout_rate, pi_arch).to(device)
         self.actor_target = MLPActor(obs_shape, act_shape, dropout_rate, pi_arch).to(device)
-        self.critic = MLPCritic(obs_shape, act_shape, self.n_agents, dropout_rate, qf_arch).to(device)
-        self.critic_target = MLPCritic(obs_shape, act_shape, self.n_agents, dropout_rate, qf_arch).to(device)
+
+        if self.use_conv_critic:
+            self.critic = ConvCritic(grid_size, qf_conv, qf_mlp, dropout_rate).to(device)
+            self.critic_target = ConvCritic(grid_size, qf_conv, qf_mlp, dropout_rate).to(device)
+        else:
+            self.critic = MLPCritic(obs_shape, act_shape, self.n_agents, dropout_rate, qf_arch).to(device)
+            self.critic_target = MLPCritic(obs_shape, act_shape, self.n_agents, dropout_rate, qf_arch).to(device)
         
         # Apply custom xavier initialization
         self.actor.apply(lambda m: self._init_weights_with_gain(m))
@@ -219,6 +342,41 @@ class SharedPolicyMADDPG:
             # Process all observations in a single forward pass
             all_actions = self.actor(all_obs).cpu().numpy()
         return all_actions
+
+    def _prepare_spatial_data(self, obs_batch: torch.Tensor, act_batch: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Convert batched agent data to spatial field format for ConvCritic.
+
+        Args:
+            obs_batch: [batch_size, n_agents * obs_dim] - flattened observations
+            act_batch: [batch_size, n_agents * act_dim] - flattened actions
+
+        Returns:
+            obs_fields: [batch_size, 2, grid_size, grid_size] - u,w velocity fields
+            act_field: [batch_size, 1, grid_size, grid_size] - action field
+        """
+        batch_size = obs_batch.size(0)
+
+        # Reshape observations: [batch_size, n_agents, obs_dim] -> [batch_size, n_agents, 1, 1, 2]
+        obs_per_agent = obs_batch.view(batch_size, self.n_agents, -1)
+
+        # Extract u and w components (assuming each agent obs has 2 channels at position [0,0])
+        # obs_per_agent: [batch_size, n_agents, 2] for halo=0 case
+        u_values = obs_per_agent[:, :, 0]  # [batch_size, n_agents]
+        w_values = obs_per_agent[:, :, 1]  # [batch_size, n_agents]
+
+        # Reshape to spatial grid
+        u_field = u_values.view(batch_size, self.grid_size, self.grid_size)  # [batch_size, 64, 64]
+        w_field = w_values.view(batch_size, self.grid_size, self.grid_size)  # [batch_size, 64, 64]
+
+        # Stack into observation fields: [batch_size, 2, 64, 64]
+        obs_fields = torch.stack([u_field, w_field], dim=1)
+
+        # Reshape actions to spatial grid
+        act_values = act_batch.view(batch_size, self.n_agents)  # [batch_size, n_agents]
+        act_field = act_values.view(batch_size, 1, self.grid_size, self.grid_size)  # [batch_size, 1, 64, 64]
+
+        return obs_fields, act_field
     
     def update_batched(self, batch: Dict[str, torch.Tensor]) -> Tuple[float, float]:
         """Update actor and critic networks using a batch of experiences (optimized for shared policy)."""
@@ -245,18 +403,26 @@ class SharedPolicyMADDPG:
             next_act_batch = self._reshape_actions_for_critic(next_actions)
             
             # Compute target Q-values
-            target_q = self.critic_target(next_obs_batch, next_act_batch)
-            
+            if self.use_conv_critic:
+                next_obs_fields, next_act_field = self._prepare_spatial_data(next_obs_batch, next_act_batch)
+                target_q = self.critic_target(next_obs_fields, next_act_field)
+            else:
+                target_q = self.critic_target(next_obs_batch, next_act_batch)
+
             # Calculate targets for all agents
             # We take the mean reward across all agents since they share the same policy
             mean_reward = rew_batch.mean(dim=1, keepdim=True)
             # Use any agent's done flag (all agents terminate together)
             done_flag = done_batch[:, 0].unsqueeze(-1)
-            
+
             target_value = mean_reward + self.gamma * (1.0 - done_flag) * target_q
-        
+
         # Update critic (batched)
-        current_q = self.critic(obs_batch, act_batch)
+        if self.use_conv_critic:
+            obs_fields, act_field = self._prepare_spatial_data(obs_batch, act_batch)
+            current_q = self.critic(obs_fields, act_field)
+        else:
+            current_q = self.critic(obs_batch, act_batch)
         critic_loss = F.mse_loss(current_q, target_value)
         
         self.critic_optimizer.zero_grad()
@@ -275,7 +441,11 @@ class SharedPolicyMADDPG:
         act_batch_new = self._reshape_actions_for_critic(actions)
         
         # Compute actor loss
-        actor_loss = -self.critic(obs_batch, act_batch_new).mean()
+        if self.use_conv_critic:
+            obs_fields_new, act_field_new = self._prepare_spatial_data(obs_batch, act_batch_new)
+            actor_loss = -self.critic(obs_fields_new, act_field_new).mean()
+        else:
+            actor_loss = -self.critic(obs_batch, act_batch_new).mean()
         
         self.actor_optimizer.zero_grad()
         actor_loss.backward()

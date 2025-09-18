@@ -5,8 +5,9 @@ halo: 0
 
 # Network architecture
 net_arch:
-  qf: [16, 64, 64]  # Critic network architecture
-  pi: [8]   
+  qf_conv: [32, 64, 32]     # Convolutional layers for spatial processing
+  qf_mlp: [256, 128]        # MLP layers after convolution
+  pi: [8]                   # Actor network architecture   
 
 # Action space parameters
 action:
