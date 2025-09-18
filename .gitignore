@@ -1,11 +1,9 @@
-run/__pycache__/
-run0/__pycache__/
 *.pyc
 *.pyo
 *.pyd
 *.pyw
 *.pyz
-*.DS_*
+.DS_*
 
 # project specific directories
 build/
@@ -23,6 +21,7 @@ run0/cans/
 run0/R-*
 run0/E-*
 run0/*.tar.gz
+run0/__pycache__/
 
 *.tar.gz
 
@@ -39,4 +38,4 @@ CONTRIBUTORS
 LICENSE
 
 # exclude minimal model inspector
-!inspect_model_minimal.py
+inspect_model_minimal.py

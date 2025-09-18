@@ -1,8 +1,7 @@
 #!/bin/bash
-#SBATCH -D /users/addh496/sharedscratch/CaNS_DRL2.4/pz_guastoni0_highdim/run0
-#SBATCH -J pz_run0
-#SBATCH --nodes=4
-#!SBATCH --ntasks=64
+#SBATCH -D /users/addh496/sharedscratch/CaNS_DRL2.4_shift/run0
+#SBATCH -J run0
+#SBATCH --nodes=2
 #SBATCH --ntasks-per-node=33
 #SBATCH --time=72:00:00
 #SBATCH --exclusive
@@ -64,8 +63,6 @@ echo "Number of nodes: $SLURM_JOB_NUM_NODES"
 echo "Total tasks: $SLURM_NTASKS"
 echo "Node list: $SLURM_JOB_NODELIST"
 
-#python mpi_cleanup.py
-
 mpirun \
   --verbose \
   --mca plm_rsh_agent srun \
@@ -91,11 +88,9 @@ mpirun \
   -x UCX_MAX_RNDV_RAILS \
   -x UCX_MEMTYPE_CACHE \
   -x PYTHONPATH \
-  python evaluate_custom_grid.py ./checkpoints_pettingzoo_grid_shared/best_model.pt --grid_i 192 --grid_j 192 --episodes 5 --no_save
+  python stwStart_pettingzoo.py 
+  #python evaluate_custom_grid.py ./checkpoints_pettingzoo_grid_shared/best_model.pt --grid_i 192 --grid_j 192 --episodes 5 --no_save
   #python stw_utils_pettingzoo.py evaluate --config config.yaml --num_episodes 5 --policy_path ./checkpoints_pettingzoo_grid_shared/best_model.pt
-  #python stwStart_pettingzoo.py 
-  #python stw_utils_pettingzoo.py evaluate --config config.yaml --num_episodes 1 --policy_path ./checkpoints_pettingzoo_grid_shared/checkpoint_step_43200.pt
-  #python debug.py
 # Clean up
 rm -f hostfile
 
