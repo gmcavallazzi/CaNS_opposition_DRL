@@ -147,7 +147,9 @@ class SharedPolicyMADDPG:
         weight_decay: float = 1e-5,  # Added L2 regularization
         device: str = "cpu",
         pi_arch: List[int] = None,
-        qf_arch: List[int] = None
+        qf_arch: List[int] = None,
+        gradient_clip: float = 1.0,
+        xavier_init_gain: float = 1.5
     ):
         self.agents = agents
         self.n_agents = len(agents)  # This line must come before using self.n_agents
@@ -157,6 +159,8 @@ class SharedPolicyMADDPG:
         self.obs_shape = obs_shape
         self.act_shape = act_shape
         self.weight_decay = weight_decay
+        self.gradient_clip = gradient_clip
+        self.xavier_init_gain = xavier_init_gain
         
         # Network architectures
         if pi_arch is None:
@@ -173,6 +177,10 @@ class SharedPolicyMADDPG:
         self.critic = MLPCritic(obs_shape, act_shape, self.n_agents, dropout_rate, qf_arch).to(device)
         self.critic_target = MLPCritic(obs_shape, act_shape, self.n_agents, dropout_rate, qf_arch).to(device)
         
+        # Apply custom xavier initialization
+        self.actor.apply(lambda m: self._init_weights_with_gain(m))
+        self.critic.apply(lambda m: self._init_weights_with_gain(m))
+
         # Initialize target networks with same weights
         self.actor_target.load_state_dict(self.actor.state_dict())
         self.critic_target.load_state_dict(self.critic.state_dict())
@@ -180,6 +188,23 @@ class SharedPolicyMADDPG:
         # Setup optimizers with weight decay
         self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=lr, weight_decay=weight_decay)
         self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=lr, weight_decay=weight_decay)
+
+    def _init_weights_with_gain(self, module):
+        """Initialize weights with configurable xavier gain."""
+        if isinstance(module, nn.Linear):
+            if hasattr(module, 'is_output_layer') and module.is_output_layer:
+                # Output layer - keep small initialization
+                nn.init.uniform_(module.weight, -0.003, 0.003)
+                if module.bias is not None:
+                    nn.init.uniform_(module.bias, -0.003, 0.003)
+            else:
+                # Hidden layers - use configurable xavier gain
+                nn.init.xavier_uniform_(module.weight, gain=self.xavier_init_gain)
+                if module.bias is not None:
+                    nn.init.constant_(module.bias, 0.0)
+        elif isinstance(module, nn.LayerNorm):
+            nn.init.constant_(module.weight, 1.0)
+            nn.init.constant_(module.bias, 0.0)
     
     
     def select_action(self, agent_id: str, obs: torch.Tensor) -> np.ndarray:
@@ -236,7 +261,7 @@ class SharedPolicyMADDPG:
         
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 1.0)
+        torch.nn.utils.clip_grad_norm_(self.critic.parameters(), self.gradient_clip)
         self.critic_optimizer.step()
         
         # Update actor (batched)
@@ -254,7 +279,7 @@ class SharedPolicyMADDPG:
         
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 1.0)
+        torch.nn.utils.clip_grad_norm_(self.actor.parameters(), self.gradient_clip)
         self.actor_optimizer.step()
         
         # Update target networks

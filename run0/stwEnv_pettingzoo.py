@@ -3,7 +3,7 @@ from mpi4py import MPI
 import gymnasium as gym
 from gymnasium import spaces
 from pettingzoo import ParallelEnv
-from utils import load_config, compute_reward, compute_local_reward, img_rescale, rescale_amp
+from utils import load_config, compute_reward
 import os
 import matplotlib.pyplot as plt
 from scipy.interpolate import RegularGridInterpolator
@@ -11,15 +11,13 @@ from scipy.interpolate import RegularGridInterpolator
 class STWParallelEnv(ParallelEnv):
     metadata = {"render_modes": ["human", "rgb_array"], "name": "stw_v0"}
     
-    def __init__(self, config, render_mode=None, save_images=False, image_save_dir="./evaluation_images"):
+    def __init__(self, config, render_mode=None):
         """
         Multi-agent environment for the STW control problem using PettingZoo.
-    
+
         Args:
             config: Configuration dictionary
             render_mode: Rendering mode ("human" or "rgb_array")
-            save_images: Whether to save images during evaluation
-            image_save_dir: Directory to save images
         """
         self.config = config
         self.render_mode = render_mode
@@ -37,16 +35,10 @@ class STWParallelEnv(ParallelEnv):
     
         # Get halo size from config (default to 1 if not specified)
         self.halo = self.config.get('halo', 1)
+
+        # Cache frequently accessed config values
+        self.om_max = self.config['action']['om_max']
         
-        # Image saving setup
-        self.save_images = save_images
-        self.image_save_dir = image_save_dir
-        self.step_counter = 0
-        self.episode_counter = 0
-        
-        if self.save_images:
-            os.makedirs(self.image_save_dir, exist_ok=True)
-            print(f"Saving images to: {self.image_save_dir}")
     
         # Setup observation and action spaces
         self._setup_spaces()
@@ -129,11 +121,6 @@ class STWParallelEnv(ParallelEnv):
         print("Python: reset() called")
         self.current_step = 0
         
-        # Reset image counters
-        if self.save_images:
-            self.step_counter = 0
-            self.episode_counter += 1
-            print(f"Starting episode {self.episode_counter}")
     
         # Reset agent list
         self.agents = self.possible_agents[:]
@@ -197,11 +184,8 @@ class STWParallelEnv(ParallelEnv):
         self.last_action = actions
         
         # Send actions to simulation - this is what goes to CaNS
-        amp_send = np.double(action_matrix * self.config['action']['om_max'])
+        amp_send = np.double(action_matrix * self.om_max)
         
-        # SAVE IMAGE 1: Actions sent to CaNS (scaled actions)
-        if self.save_images:
-            self._save_actions_to_cans_image(amp_send)
         
         self.common_comm.Send([amp_send, MPI.DOUBLE], dest=1, tag=1)
         
@@ -215,18 +199,15 @@ class STWParallelEnv(ParallelEnv):
         self.common_comm.Recv([self.w_obs_all, MPI.DOUBLE], source=1, tag=9)
         self.common_comm.Recv([self.dpdx, MPI.DOUBLE], source=1, tag=4)
         
-        # SAVE IMAGES 2&3: Raw observations received from CaNS
-        if self.save_images:
-            self._save_raw_observations_images(self.u_obs_all, self.w_obs_all)
         
         # Process observations: subtract mean and divide by om_max
         # For u velocity component
         u_mean = np.mean(self.u_obs_all)
-        self.u_obs_mat = (self.u_obs_all - u_mean) / self.config['action']['om_max']
+        self.u_obs_mat = (self.u_obs_all - u_mean) / self.om_max
         
         # For w velocity component
         w_mean = np.mean(self.w_obs_all)
-        self.w_obs_mat = (self.w_obs_all - w_mean) / self.config['action']['om_max']
+        self.w_obs_mat = (self.w_obs_all - w_mean) / self.om_max
         
         # Store the initial observation if this is the first step of the first episode
         if not self.initial_obs_captured and self.total_steps == 0:
@@ -273,7 +254,6 @@ class STWParallelEnv(ParallelEnv):
         # Update step counters
         self.current_step += 1
         self.total_steps += 1
-        self.step_counter += 1
         
         # Handle episode completion
         self._check_simulation_end()
@@ -283,83 +263,7 @@ class STWParallelEnv(ParallelEnv):
         
         return observations, rewards, terminations, truncations, infos
 
-    def _save_actions_to_cans_image(self, amp_send):
-        """Save the scaled actions that are sent to CaNS"""
-        try:
-            plt.figure(figsize=(10, 8))
-            im = plt.imshow(amp_send, cmap='RdBu_r', origin='lower')
-            plt.colorbar(im, label='Action Value (scaled by om_max)')
-            plt.title(f'Actions Sent to CaNS - Episode {self.episode_counter}, Step {self.step_counter}')
-            plt.xlabel('j (grid points)')
-            plt.ylabel('i (grid points)')
-            
-            # Add statistics to the title
-            mean_val = np.mean(amp_send)
-            std_val = np.std(amp_send)
-            min_val = np.min(amp_send)
-            max_val = np.max(amp_send)
-            plt.suptitle(f'Mean: {mean_val:.6f}, Std: {std_val:.6f}, Range: [{min_val:.6f}, {max_val:.6f}]', 
-                        fontsize=10)
-            
-            filename = f"actions_to_cans_ep{self.episode_counter:03d}_step{self.step_counter:04d}.png"
-            filepath = os.path.join(self.image_save_dir, filename)
-            plt.savefig(filepath, dpi=150, bbox_inches='tight')
-            plt.close()
-            
-            if self.step_counter <= 3:  # Print for first few steps
-                print(f"Saved actions to CaNS: {filename}")
-            
-        except Exception as e:
-            print(f"Error saving actions to CaNS image: {e}")
 
-    def _save_raw_observations_images(self, u_obs_raw, w_obs_raw):
-        """Save the raw u and w observations received from CaNS"""
-        try:
-            # Create figure with two subplots
-            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
-            
-            # U velocity observations
-            im1 = ax1.imshow(u_obs_raw, cmap='viridis', origin='lower')
-            ax1.set_title(f'U Velocity Observations - Episode {self.episode_counter}, Step {self.step_counter}')
-            ax1.set_xlabel('j (grid points)')
-            ax1.set_ylabel('i (grid points)')
-            cbar1 = plt.colorbar(im1, ax=ax1, label='U Velocity')
-            
-            # Add statistics
-            u_mean = np.mean(u_obs_raw)
-            u_std = np.std(u_obs_raw)
-            u_min = np.min(u_obs_raw)
-            u_max = np.max(u_obs_raw)
-            ax1.text(0.02, 0.98, f'Mean: {u_mean:.6f}\nStd: {u_std:.6f}\nMin: {u_min:.6f}\nMax: {u_max:.6f}', 
-                    transform=ax1.transAxes, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
-            
-            # W velocity observations
-            im2 = ax2.imshow(w_obs_raw, cmap='plasma', origin='lower')
-            ax2.set_title(f'W Velocity Observations - Episode {self.episode_counter}, Step {self.step_counter}')
-            ax2.set_xlabel('j (grid points)')
-            ax2.set_ylabel('i (grid points)')
-            cbar2 = plt.colorbar(im2, ax=ax2, label='W Velocity')
-            
-            # Add statistics
-            w_mean = np.mean(w_obs_raw)
-            w_std = np.std(w_obs_raw)
-            w_min = np.min(w_obs_raw)
-            w_max = np.max(w_obs_raw)
-            ax2.text(0.02, 0.98, f'Mean: {w_mean:.6f}\nStd: {w_std:.6f}\nMin: {w_min:.6f}\nMax: {w_max:.6f}', 
-                    transform=ax2.transAxes, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
-            
-            plt.tight_layout()
-            
-            filename = f"observations_from_cans_ep{self.episode_counter:03d}_step{self.step_counter:04d}.png"
-            filepath = os.path.join(self.image_save_dir, filename)
-            plt.savefig(filepath, dpi=150, bbox_inches='tight')
-            plt.close()
-            
-            if self.step_counter <= 3:  # Print for first few steps
-                print(f"Saved observations from CaNS: {filename}")
-            
-        except Exception as e:
-            print(f"Error saving raw observations images: {e}")
 
     def get_local_observation(self, u_obs, w_obs, i, j):
         """
@@ -367,7 +271,7 @@ class STWParallelEnv(ParallelEnv):
         Size depends on the halo parameter in config.
         Directly processes raw observations by multiplying with om_max.
         """
-        om_max = self.config['action']['om_max']
+        om_max = self.om_max
     
         if self.halo == 0:
             # Single point observation (1x1x2)
@@ -449,29 +353,6 @@ class STWParallelEnv(ParallelEnv):
             print("Python: Sending CONTN - continuing episode")
             self.common_comm.Bcast([b'CONTN', MPI.CHAR], root=0)
    
-    def render(self):
-        """Render the environment (if supported)."""
-        if self.render_mode == "human":
-            # Implementation for human-visible rendering would go here
-            # For now, just print some basic info
-            print(f"Step: {self.current_step}, dpdx: {self.dpdx:.6f}")
-            return None
-        elif self.render_mode == "rgb_array":
-            # Create a visualization of the velocity field as an RGB array
-            # This is a simple example - you might want to create a more sophisticated visualization
-            u_normalized = (self.u_obs_mat / 255.0)
-            w_normalized = (self.w_obs_mat / 255.0)
-            
-            # Create RGB channels (use u for red, w for green, and a combination for blue)
-            r_channel = u_normalized
-            g_channel = w_normalized
-            b_channel = (u_normalized + w_normalized) / 2
-            
-            # Combine channels into RGB image
-            rgb_array = np.stack([r_channel, g_channel, b_channel], axis=2)
-            return rgb_array
-        
-        return None
     
     def close(self):
         """Clean up resources."""
@@ -483,10 +364,6 @@ class STWParallelEnv(ParallelEnv):
         except Exception as e:
             print(f"Error during environment cleanup: {e}")
     
-    def seed(self, seed=None):
-        """Set random seed for reproducibility."""
-        if seed is not None:
-            np.random.seed(seed)
         
     def observation_space(self, agent):
         """Return the observation space for a specific agent."""

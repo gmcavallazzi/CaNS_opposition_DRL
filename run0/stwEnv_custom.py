@@ -3,11 +3,12 @@ from mpi4py import MPI
 import gymnasium as gym
 from gymnasium import spaces
 from pettingzoo import ParallelEnv
-from utils import load_config, compute_reward, compute_local_reward, img_rescale, rescale_amp
+from utils import load_config, compute_reward, img_rescale
 import os
 import matplotlib.pyplot as plt
 import sys
 import multiprocessing as mp
+from scipy.interpolate import RegularGridInterpolator
 
 
 def agent_processing_worker():
@@ -187,7 +188,10 @@ class STWParallelEnvCustom(ParallelEnv):
         
         # Get halo size from config
         self.halo = self.config.get('halo', 1)
-        
+
+        # Cache frequently accessed config values
+        self.om_max = self.config['action']['om_max']
+
         # Image saving setup
         self.save_images = save_images
         self.image_save_dir = image_save_dir
@@ -242,6 +246,13 @@ class STWParallelEnvCustom(ParallelEnv):
         self.initial_obs_captured = False
         self.initial_u_obs_mat = None
         self.initial_w_obs_mat = None
+
+        # Initialize field shift coordinates if enabled
+        if self.config.get('field_shift', {}).get('enable', False):
+            Lx = self.config['field_shift']['domain_size']['Lx']
+            Ly = self.config['field_shift']['domain_size']['Ly']
+            self.shift_x = np.linspace(0, Lx, self.grid_i, endpoint=False)
+            self.shift_y = np.linspace(0, Ly, self.grid_j, endpoint=False)
 
     def _setup_spaces(self):
         """Set up the observation and action spaces for agents."""
@@ -356,8 +367,8 @@ class STWParallelEnvCustom(ParallelEnv):
         
         self.last_action = actions
         
-        # Send actions to CaNS (unchanged)
-        amp_send = np.double(action_matrix * self.config['action']['om_max'])
+        # Send actions to simulation - this is what goes to CaNS
+        amp_send = np.double(action_matrix * self.om_max)
         
         if self.save_images:
             self._save_actions_to_cans_image(amp_send)
@@ -396,26 +407,35 @@ class STWParallelEnvCustom(ParallelEnv):
         if self.save_images:
             self._save_raw_observations_images(self.u_obs_all, self.w_obs_all)
         
-        # Process observations (unchanged)
+        # Process observations: subtract mean and divide by om_max
         print("PYTHON: Processing observations...")
+        # For u velocity component
         u_mean = np.mean(self.u_obs_all)
         print(f"PYTHON: u_mean = {u_mean}")
-        self.u_obs_mat = (self.u_obs_all - u_mean) / self.config['action']['om_max']
+        self.u_obs_mat = (self.u_obs_all - u_mean) / self.om_max
         print(f"PYTHON: u_obs_mat processed, range=[{np.min(self.u_obs_mat):.6f}, {np.max(self.u_obs_mat):.6f}]")
-        
+
+        # For w velocity component
         w_mean = np.mean(self.w_obs_all)
         print(f"PYTHON: w_mean = {w_mean}")
-        self.w_obs_mat = (self.w_obs_all - w_mean) / self.config['action']['om_max']
+        self.w_obs_mat = (self.w_obs_all - w_mean) / self.om_max
         print(f"PYTHON: w_obs_mat processed, range=[{np.min(self.w_obs_mat):.6f}, {np.max(self.w_obs_mat):.6f}]")
-        print(f"PYTHON: om_max = {self.config['action']['om_max']}")
-        
+        print(f"PYTHON: om_max = {self.om_max}")
+
         # Store initial observation if needed
         if not self.initial_obs_captured and self.total_steps == 0:
             self.initial_u_obs_mat = self.u_obs_mat.copy()
             self.initial_w_obs_mat = self.w_obs_mat.copy()
             self.initial_obs_captured = True
             print("PYTHON: Initial observation captured for future resets")
-        
+
+        # Apply field shifting if enabled
+        if self.config.get('field_shift', {}).get('enable', False):
+            u_avg = np.mean(self.u_obs_mat)
+            dx_shift = u_avg * self.config['field_shift']['dt']
+            self.u_obs_mat = self.shift_field_subgrid(self.shift_x, self.shift_y, self.u_obs_mat, dx_shift)
+            self.w_obs_mat = self.shift_field_subgrid(self.shift_x, self.shift_y, self.w_obs_mat, dx_shift)
+
         # Compute global reward
         print("PYTHON: Computing global reward...")
         global_reward = float(compute_reward(self.dpdx, self.config))
@@ -531,27 +551,65 @@ class STWParallelEnvCustom(ParallelEnv):
         return observations
 
     def get_local_observation(self, u_obs, w_obs, i, j):
-        """Extract local observation (same as original)."""
-        om_max = self.config['action']['om_max']
+        """
+        Extract local observation for a grid-based agent with periodic boundary conditions.
+        Size depends on the halo parameter in config.
+        Directly processes raw observations by multiplying with om_max.
+        """
+        om_max = self.om_max
     
         if self.halo == 0:
+            # Single point observation (1x1x2)
             local_obs = np.zeros((1, 1, 2), dtype=np.float32)
-            local_obs[0, 0, 0] = u_obs[i, j] * om_max
-            local_obs[0, 0, 1] = w_obs[i, j] * om_max
+            local_obs[0, 0, 0] = u_obs[i, j] * om_max  # u velocity at agent's position
+            local_obs[0, 0, 1] = w_obs[i, j] * om_max  # w velocity at agent's position
         else:
+            # Square observation with size (2*halo+1) x (2*halo+1) x 2
             size = 2 * self.halo + 1
             local_obs = np.zeros((size, size, 2), dtype=np.float32)
-        
+
             for di in range(-self.halo, self.halo + 1):
                 for dj in range(-self.halo, self.halo + 1):
+                    # Apply periodic boundary conditions
                     obs_i = (i + di) % self.grid_i
                     obs_j = (j + dj) % self.grid_j
+
+                    # Map to observation array indices
                     local_i = di + self.halo
                     local_j = dj + self.halo
+
+                    # First channel: u velocity, directly multiplied by om_max
                     local_obs[local_i, local_j, 0] = u_obs[obs_i, obs_j] * om_max
+                    # Second channel: w velocity, directly multiplied by om_max
                     local_obs[local_i, local_j, 1] = w_obs[obs_i, obs_j] * om_max
                 
         return local_obs
+
+    def shift_field_subgrid(self, x, y, field, dx_shift):
+        """Shift field by dx_shift using subgrid interpolation"""
+        nx, ny = field.shape
+        Lx = x[-1] - x[0] + (x[1] - x[0])  # Add one grid spacing for correct domain size
+
+        # Create interpolator
+        interp = RegularGridInterpolator((x, y), field,
+                                       bounds_error=False,
+                                       fill_value=None,  # Use nearest for out-of-bounds
+                                       method='linear')
+
+        # Create shifted coordinates (with periodic boundary conditions)
+        X, Y = np.meshgrid(x, y, indexing='ij')
+        X_shifted = X - dx_shift
+
+        # Handle periodic boundaries
+        X_shifted = X_shifted % Lx
+
+        # Create points for interpolation
+        points = np.column_stack([X_shifted.ravel(), Y.ravel()])
+
+        # Interpolate
+        field_shifted = interp(points).reshape(nx, ny)
+
+        return field_shifted
 
     def _save_actions_to_cans_image(self, amp_send):
         """Save the scaled actions that are sent to CaNS (same as original)."""

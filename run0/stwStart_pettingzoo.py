@@ -18,6 +18,44 @@ from models_pettingzoo import (
 )
 import time
 
+def compute_noise_scale(current_episode: int, config: Dict[str, Any]) -> float:
+    """
+    Compute noise scale based on episode progress and decay strategy.
+
+    Args:
+        current_episode: Current episode number
+        config: Configuration dictionary containing action_noise parameters
+
+    Returns:
+        Current noise scale value
+    """
+    action_noise_config = config['model']['action_noise']
+    initial_sigma = action_noise_config['initial_sigma']
+    final_sigma = action_noise_config['final_sigma']
+    decay_episodes = action_noise_config['decay_episodes']
+    decay_type = action_noise_config['decay_type']
+
+    # If we haven't reached decay episodes yet, compute decay
+    if current_episode < decay_episodes:
+        progress = current_episode / decay_episodes
+
+        if decay_type == "linear":
+            noise_scale = initial_sigma + (final_sigma - initial_sigma) * progress
+        elif decay_type == "exponential":
+            # Exponential decay: sigma = initial * exp(ln(final/initial) * progress)
+            decay_factor = np.log(final_sigma / initial_sigma)
+            noise_scale = initial_sigma * np.exp(decay_factor * progress)
+        elif decay_type == "polynomial":
+            # Polynomial decay (quadratic) for smoother transition
+            noise_scale = initial_sigma + (final_sigma - initial_sigma) * (progress ** 2)
+        else:
+            raise ValueError(f"Unknown decay type: {decay_type}")
+    else:
+        # After decay period, use final sigma
+        noise_scale = final_sigma
+
+    return noise_scale
+
 def train_maddpg(
     config: Dict[str, Any],
     checkpoint_dir: str = "./checkpoints_pettingzoo",
@@ -65,8 +103,6 @@ def train_maddpg(
     train_freq = config['model']['train_freq']
     save_freq = config['training']['save_freq']
     
-    # Log interval (default to 1 if not specified)
-    log_interval = config['training'].get('log_interval', 1)
     
     # Create shared policy MADDPG trainer
     maddpg = SharedPolicyMADDPG(
@@ -76,9 +112,12 @@ def train_maddpg(
         gamma=config['model']['gamma'],
         tau=config['model']['tau'],
         lr=config['model']['learning_rate'],
+        weight_decay=config['model']['weight_decay'],
         device=device,
         pi_arch=config.get('net_arch', {}).get('pi', [64, 64]),
-        qf_arch=config.get('net_arch', {}).get('qf', [64, 64, 64])
+        qf_arch=config.get('net_arch', {}).get('qf', [64, 64, 64]),
+        gradient_clip=config['training']['gradient_clip'],
+        xavier_init_gain=config['training']['xavier_init_gain']
     )
     
     # Initialize replay buffer - always use the optimized batched buffer
@@ -131,11 +170,6 @@ def train_maddpg(
     # Reset environment
     observations, infos = env.reset()
     
-    # Training metrics for ongoing tracking (not just at episode end)
-    current_actor_loss = 0
-    current_critic_loss = 0
-    current_q_value = 0
-    update_count = 0
     
     print("Starting training...")
     try:
@@ -154,21 +188,22 @@ def train_maddpg(
                 # Directly use the actor network
                 all_actions = maddpg.actor(all_obs_tensor).cpu().numpy()
     
-                # Add exploration noise
-                noise_scale = config.get('model', {}).get('action_noise', {}).get('sigma', 0.1)
+                # Add exploration noise with decay schedule
+                noise_scale = compute_noise_scale(episode, config)
                 noise = np.random.normal(0, noise_scale, size=all_actions.shape)
                 all_actions = np.clip(all_actions + noise, -1, 1)
             
             # Store raw actions for logging
             episode_actions.extend(all_actions.flatten())
-            
+
             # Calculate action statistics for this step
             action_mean = np.mean(all_actions)
             action_std = np.std(all_actions)
-            
+
             # Track action statistics
             episode_action_mean_history.append(action_mean)
             episode_action_std_history.append(action_std)
+            
             
             # Convert to dictionary
             actions = {agent: all_actions[i] for i, agent in enumerate(agents)}
@@ -200,21 +235,6 @@ def train_maddpg(
             dpdx_value = infos[first_agent].get('dpdx', 0)
             episode_dpdx_values.append(dpdx_value)
             
-            # Always log dpdx to have continuous data
-            writer.add_scalar('Physics/dpdx', dpdx_value, total_steps)
-            
-            # Log consistent step-level metrics 
-            if total_steps % log_interval == 0:
-                # Always log these basic metrics against steps
-                writer.add_scalar('Step/mean_reward', step_mean_reward, total_steps)
-                writer.add_scalar('Step/action_mean', action_mean, total_steps)
-                writer.add_scalar('Step/action_std', action_std, total_steps)
-                
-                # Log loss information if we have it (after first update)
-                if update_count > 0:
-                    writer.add_scalar('Loss/critic', current_critic_loss, total_steps)
-                    writer.add_scalar('Loss/actor', current_actor_loss, total_steps)
-                    writer.add_scalar('Training/q_value', current_q_value, total_steps)
             
             observations = next_observations
             episode_steps += 1
@@ -222,7 +242,6 @@ def train_maddpg(
             
             # Train networks
             if replay_buffer.size > batch_size and total_steps % train_freq == 0:
-                update_count += 1
                 batch_critic_losses = []
                 batch_actor_losses = []
                 batch_q_values = []
@@ -247,11 +266,6 @@ def train_maddpg(
                         q_values = maddpg.critic(critic_input_obs, critic_input_act)
                         batch_q_values.append(q_values.mean().item())
                 
-                # Store the latest values for logging against steps
-                current_critic_loss = np.mean(batch_critic_losses)
-                current_actor_loss = np.mean(batch_actor_losses)
-                current_q_value = np.mean(batch_q_values)
-                
                 # Add values to episode tracking lists
                 episode_critic_losses.extend(batch_critic_losses)
                 episode_actor_losses.extend(batch_actor_losses)
@@ -267,7 +281,6 @@ def train_maddpg(
                 # Log common episode metrics
                 writer.add_scalar('Episode/reward', avg_reward, episode)
                 writer.add_scalar('Episode/steps', episode_steps, episode)
-                writer.add_scalar('Episode/total_steps', total_steps, episode)
                 
                 # Log environment physics metrics
                 avg_dpdx = np.mean(episode_dpdx_values) if episode_dpdx_values else 0
@@ -290,36 +303,22 @@ def train_maddpg(
                 if episode_q_values:
                     avg_q_val = np.mean(episode_q_values)
                     writer.add_scalar('Episode/q_value', avg_q_val, episode)
-                
-                # Log buffer statistics
-                writer.add_scalar('Episode/buffer_size', replay_buffer.size, episode)
-                
-                # Log aggregate reward statistics
-                reward_values = list(episode_rewards.values())
-                writer.add_scalar('Episode/reward_variance', np.var(reward_values), episode)
-                
+
                 # Action statistics
                 if episode_action_mean_history:
                     writer.add_scalar('Episode/action_mean', np.mean(episode_action_mean_history), episode)
                     writer.add_scalar('Episode/action_std', np.mean(episode_action_std_history), episode)
-                
+
+                # Log current noise scale for exploration tracking
+                current_noise_scale = compute_noise_scale(episode, config)
+                writer.add_scalar('Episode/noise_scale', current_noise_scale, episode)
+
                 # Generate detailed histograms (every 5 episodes)
                 if episode % 5 == 0:
                     # Actions histogram
                     if episode_actions:
                         writer.add_histogram('Histograms/actions', np.array(episode_actions), episode)
                     
-                    # Observation histograms - all channels
-                    sample_agent = agents[0]  # Just use the first agent for consistent tracking
-                    if sample_agent in observations:
-                        obs = observations[sample_agent]
-                        # Log each channel separately
-                        if obs.shape[2] >= 1:
-                            writer.add_histogram('Histograms/obs_channel0', 
-                                              obs[:,:,0].flatten(), episode)
-                        if obs.shape[2] >= 2:
-                            writer.add_histogram('Histograms/obs_channel1', 
-                                              obs[:,:,1].flatten(), episode)
                     
                     # Q-value distribution
                     if episode_q_values:
@@ -381,7 +380,10 @@ def train_maddpg(
         hours = int(elapsed_time // 3600)
         minutes = int((elapsed_time % 3600) // 60)
         seconds = int(elapsed_time % 60)
-        
+
+        # Calculate final noise scale for summary
+        noise_scale = compute_noise_scale(episode, config)
+
         summary_text = f"""
         Training completed or interrupted:
         - Total steps: {total_steps}/{max_steps}

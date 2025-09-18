@@ -1,6 +1,4 @@
 # General parameters
-n_actions: 1800
-n_actuations: 1800
 total_timesteps: 1800000  # n_actions * 400
 maxprocs: [64]
 halo: 0
@@ -22,12 +20,10 @@ grid:
 
 # Reward parameters
 reward:
-  function: "dpdx"
   dpdx:
     min: -0.0045
     max: -0.0018
   global_weight: 1.0
-  local_weight: 0.0
 
 # Model parameters
 model:
@@ -40,7 +36,10 @@ model:
   train_freq: 300
   gradient_steps: 64
   action_noise:
-    sigma: 0.02
+    initial_sigma: 0.1    # Starting noise level - higher for better initial exploration
+    final_sigma: 0.005    # Final noise level - low but non-zero to maintain some exploration
+    decay_episodes: 500   # Number of episodes to decay from initial to final (50% of total episodes)
+    decay_type: "exponential"  # "linear", "exponential", or "polynomial"
 
 # Field shift parameters
 field_shift:
@@ -52,10 +51,7 @@ field_shift:
 
 # Training parameters
 training:
-  start_episode_length: 1800
+  start_episode_length: 1800  # Fixed episode length in steps - all episodes have exactly this many steps
   save_freq: 3600
-  log_interval: 1
   gradient_clip: 1.0  # Enable gradient clipping
-  layer_norm: true    # Enable layer normalization
-  use_tanh_output: true  # Explicit tanh activation in final output
   xavier_init_gain: 1.5  # Higher gain for Xavier initialization
