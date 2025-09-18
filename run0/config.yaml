@@ -26,7 +26,7 @@ reward:
     max: -0.0018
   global_weight: 1.0
   diversity:
-    enable: true
+    enable: false
     weight: -0.1          # Negative weight to penalize low diversity
     min_std_threshold: 0.01  # Minimum action std to avoid penalty
 
