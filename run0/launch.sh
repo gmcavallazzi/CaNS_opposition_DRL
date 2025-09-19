@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH -D /users/addh496/sharedscratch/CaNS_DRL2.4_shift/run0
-#SBATCH -J run0cc
+#SBATCH -J run0
 #SBATCH --nodes=2
 #SBATCH --ntasks-per-node=33
 #SBATCH --time=72:00:00
@@ -13,6 +13,26 @@ flight env activate gridware
 module load compilers/gcc/11.2.0
 module load mpi/openmpi/4.1.1
 module load fftw/3.3.10
+
+GIT_BRANCH=${1:-convCritic}
+echo "Target git branch: $GIT_BRANCH"
+
+# Git repository handling
+if [ -d ".git" ]; then
+    echo "----------------------------------------"
+    echo "Git repository detected"
+    current_branch=$(git rev-parse --abbrev-ref HEAD)
+    
+    if [ "$current_branch" != "$GIT_BRANCH" ]; then
+        echo "Switching to branch: $GIT_BRANCH"
+        git checkout $GIT_BRANCH
+    fi
+    
+    echo "Running on branch: $(git rev-parse --abbrev-ref HEAD)"
+    echo "Latest commit: $(git log -1 --oneline)"
+    echo "----------------------------------------"
+fi
+
 #
 # Conda setup
 __conda_setup="$('/users/addh496/sharedscratch/anaconda3/bin/conda' 'shell.bash' 'hook' 2> /dev/null)"
@@ -93,4 +113,3 @@ mpirun \
   #python stw_utils_pettingzoo.py evaluate --config config.yaml --num_episodes 5 --policy_path ./checkpoints_pettingzoo_grid_shared/best_model.pt
 # Clean up
 rm -f hostfile
-
