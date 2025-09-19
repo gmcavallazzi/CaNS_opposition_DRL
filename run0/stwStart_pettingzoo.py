@@ -11,7 +11,13 @@ import argparse
 import matplotlib.pyplot as plt
 
 from stwEnv_pettingzoo import STWParallelEnv
-from utils import load_config
+from utils import (
+    load_config,
+    compute_gradient_metrics,
+    compute_layer_wise_gradients,
+    check_gradient_health,
+    adjust_learning_rates
+)
 from models_pettingzoo import (
     SharedPolicyMADDPG,
     BatchedReplayBuffer
@@ -272,7 +278,62 @@ def train_maddpg(
                         else:
                             q_values = maddpg.critic(critic_input_obs, critic_input_act)
                         batch_q_values.append(q_values.mean().item())
-                
+
+                # Gradient monitoring and adaptive control
+                grad_config = config.get('training', {}).get('gradient_monitoring', {})
+                if grad_config.get('enable', False) and total_steps % grad_config.get('log_frequency', 100) == 0:
+                    # Compute gradient metrics for both networks
+                    actor_metrics = compute_gradient_metrics(maddpg.actor)
+                    critic_metrics = compute_gradient_metrics(maddpg.critic)
+
+                    # Check gradient health and apply adaptive controls
+                    actor_exploding, actor_vanishing, actor_clip = check_gradient_health(actor_metrics, config)
+                    critic_exploding, critic_vanishing, critic_clip = check_gradient_health(critic_metrics, config)
+
+                    # Apply adaptive learning rate adjustments
+                    adjust_learning_rates(maddpg.actor_optimizer, actor_exploding, config)
+                    adjust_learning_rates(maddpg.critic_optimizer, critic_exploding, config)
+
+                    # Update gradient clipping if adaptive clipping is enabled
+                    if grad_config.get('adaptive_clipping', False):
+                        if actor_exploding:
+                            maddpg.gradient_clip = min(actor_clip, maddpg.gradient_clip)
+                        if critic_exploding:
+                            maddpg.gradient_clip = min(critic_clip, maddpg.gradient_clip)
+
+                    # Log gradient metrics to TensorBoard
+                    writer.add_scalar('Gradients/Actor/global_norm', actor_metrics['global_norm'], total_steps)
+                    writer.add_scalar('Gradients/Actor/mean_norm', actor_metrics['mean_norm'], total_steps)
+                    writer.add_scalar('Gradients/Actor/max_norm', actor_metrics['max_norm'], total_steps)
+                    writer.add_scalar('Gradients/Actor/std_norm', actor_metrics['std_norm'], total_steps)
+
+                    writer.add_scalar('Gradients/Critic/global_norm', critic_metrics['global_norm'], total_steps)
+                    writer.add_scalar('Gradients/Critic/mean_norm', critic_metrics['mean_norm'], total_steps)
+                    writer.add_scalar('Gradients/Critic/max_norm', critic_metrics['max_norm'], total_steps)
+                    writer.add_scalar('Gradients/Critic/std_norm', critic_metrics['std_norm'], total_steps)
+
+                    # Log health indicators
+                    writer.add_scalar('Gradients/Actor/is_exploding', float(actor_exploding), total_steps)
+                    writer.add_scalar('Gradients/Actor/is_vanishing', float(actor_vanishing), total_steps)
+                    writer.add_scalar('Gradients/Critic/is_exploding', float(critic_exploding), total_steps)
+                    writer.add_scalar('Gradients/Critic/is_vanishing', float(critic_vanishing), total_steps)
+
+                    # Log current learning rates
+                    actor_lr = maddpg.actor_optimizer.param_groups[0]['lr']
+                    critic_lr = maddpg.critic_optimizer.param_groups[0]['lr']
+                    writer.add_scalar('Training/actor_lr', actor_lr, total_steps)
+                    writer.add_scalar('Training/critic_lr', critic_lr, total_steps)
+                    writer.add_scalar('Training/gradient_clip', maddpg.gradient_clip, total_steps)
+
+                    # Layer-wise gradient tracking (optional, more detailed)
+                    if grad_config.get('track_layer_wise', False):
+                        actor_layers = compute_layer_wise_gradients(maddpg.actor, 'actor')
+                        critic_layers = compute_layer_wise_gradients(maddpg.critic, 'critic')
+                        for layer_name, grad_norm in actor_layers.items():
+                            writer.add_scalar(f'Gradients/Layers/{layer_name}', grad_norm, total_steps)
+                        for layer_name, grad_norm in critic_layers.items():
+                            writer.add_scalar(f'Gradients/Layers/{layer_name}', grad_norm, total_steps)
+
                 # Add values to episode tracking lists
                 episode_critic_losses.extend(batch_critic_losses)
                 episode_actor_losses.extend(batch_actor_losses)

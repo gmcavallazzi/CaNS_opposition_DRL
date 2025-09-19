@@ -59,6 +59,106 @@ def compute_diversity_penalty(actions, config):
 
     return diversity_penalty
 
+def compute_gradient_metrics(network) -> dict:
+    """
+    Compute gradient health metrics for a network.
+
+    Args:
+        network: PyTorch neural network
+
+    Returns:
+        Dictionary of gradient metrics
+    """
+    metrics = {}
+
+    # Global gradient norm
+    total_norm = 0.0
+    param_count = 0
+    grad_norms = []
+
+    for name, param in network.named_parameters():
+        if param.grad is not None:
+            param_norm = param.grad.data.norm(2).item()
+            grad_norms.append(param_norm)
+            total_norm += param_norm ** 2
+            param_count += 1
+
+    if param_count > 0:
+        total_norm = total_norm ** (1. / 2)
+        metrics['global_norm'] = total_norm
+        metrics['mean_norm'] = sum(grad_norms) / len(grad_norms)
+        metrics['max_norm'] = max(grad_norms) if grad_norms else 0.0
+        metrics['min_norm'] = min(grad_norms) if grad_norms else 0.0
+        metrics['std_norm'] = np.std(grad_norms) if len(grad_norms) > 1 else 0.0
+    else:
+        metrics = {k: 0.0 for k in ['global_norm', 'mean_norm', 'max_norm', 'min_norm', 'std_norm']}
+
+    return metrics
+
+def compute_layer_wise_gradients(network, network_name: str) -> dict:
+    """
+    Compute layer-wise gradient norms for detailed analysis.
+
+    Args:
+        network: PyTorch neural network
+        network_name: Name prefix for logging ('actor' or 'critic')
+
+    Returns:
+        Dictionary mapping layer names to gradient norms
+    """
+    layer_metrics = {}
+
+    for name, param in network.named_parameters():
+        if param.grad is not None:
+            layer_metrics[f"{network_name}/{name}"] = param.grad.data.norm(2).item()
+
+    return layer_metrics
+
+def check_gradient_health(metrics: dict, config: dict) -> tuple:
+    """
+    Check gradient health and determine if adjustments are needed.
+
+    Args:
+        metrics: Gradient metrics from compute_gradient_metrics
+        config: Training configuration
+
+    Returns:
+        (is_exploding, is_vanishing, suggested_clip_value)
+    """
+    grad_config = config.get('training', {}).get('gradient_monitoring', {})
+    explosion_threshold = grad_config.get('explosion_threshold', 10.0)
+    vanishing_threshold = grad_config.get('vanishing_threshold', 1e-6)
+
+    global_norm = metrics.get('global_norm', 0.0)
+
+    is_exploding = global_norm > explosion_threshold
+    is_vanishing = global_norm < vanishing_threshold
+
+    # Suggest adaptive clipping value (slightly above current norm if exploding)
+    if is_exploding:
+        suggested_clip = explosion_threshold * 0.8
+    else:
+        suggested_clip = max(1.0, global_norm * 1.2)  # Allow some headroom
+
+    return is_exploding, is_vanishing, suggested_clip
+
+def adjust_learning_rates(optimizer, is_exploding: bool, config: dict):
+    """
+    Adjust learning rates when gradients explode.
+
+    Args:
+        optimizer: PyTorch optimizer
+        is_exploding: Whether gradients are exploding
+        config: Training configuration
+    """
+    if is_exploding:
+        grad_config = config.get('training', {}).get('gradient_monitoring', {})
+        reduction_factor = grad_config.get('lr_reduction_factor', 0.8)
+
+        # Reduce learning rates
+        for param_group in optimizer.param_groups:
+            param_group['lr'] *= reduction_factor
+
 def img_rescale(mat, config, min_expected=None, max_expected=None):
     """
     Rescale a matrix to [0, 255] range for visualization.

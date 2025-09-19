@@ -62,4 +62,12 @@ training:
   save_freq: 3600
   gradient_clip: 1.0  # Enable gradient clipping
   xavier_init_gain: 1.5  # Higher gain for Xavier initialization
+  gradient_monitoring:
+    enable: true
+    log_frequency: 100          # Log gradient metrics every N training steps
+    explosion_threshold: 10.0   # Gradient norm threshold for explosion detection
+    vanishing_threshold: 1e-6   # Minimum gradient norm for vanishing detection
+    adaptive_clipping: true     # Dynamically adjust gradient clipping
+    lr_reduction_factor: 0.8    # Factor to reduce LR when gradients explode
+    track_layer_wise: true      # Track gradients for individual layers
 
