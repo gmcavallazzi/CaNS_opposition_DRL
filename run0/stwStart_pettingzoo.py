@@ -264,9 +264,13 @@ def train_maddpg(
                     with torch.no_grad():
                         critic_input_obs = batch['obs']
                         critic_input_act = batch['acts']
-                        
-                        # Get Q-values
-                        q_values = maddpg.critic(critic_input_obs, critic_input_act)
+
+                        # Get Q-values (handle spatial data if using ConvCritic)
+                        if maddpg.use_conv_critic:
+                            obs_fields, act_field = maddpg._prepare_spatial_data(critic_input_obs, critic_input_act)
+                            q_values = maddpg.critic(obs_fields, act_field)
+                        else:
+                            q_values = maddpg.critic(critic_input_obs, critic_input_act)
                         batch_q_values.append(q_values.mean().item())
                 
                 # Add values to episode tracking lists
