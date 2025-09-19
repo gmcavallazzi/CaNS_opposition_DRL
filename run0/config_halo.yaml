@@ -1,0 +1,81 @@
+# Halo-optimized configuration
+# This config is designed for running with halo=1 to avoid memory allocation issues
+
+# General parameters
+total_timesteps: 1800000  # n_actions * 400
+maxprocs: [64]
+halo: 1  # Enable halo for local observation windows
+
+# Network architecture
+net_arch:
+  qf_conv: [32, 64, 32]     # Convolutional layers for spatial processing
+  qf_mlp: [256, 128]        # MLP layers after convolution
+  # qf: [16, 64, 64]        # Uncomment this and remove qf_conv/qf_mlp to use old MLP critic
+  pi: [8]                   # Actor network architecture
+
+# Action space parameters
+action:
+  om_max: 0.064
+  scaling_factor: 2.0  # Multiplier for actions sent to CaNS
+
+# Grid parameters
+grid:
+  target:
+    i: 64
+    j: 64
+
+# Reward parameters
+reward:
+  dpdx:
+    min: -0.0045
+    max: -0.0018
+  global_weight: 1.0
+  diversity:
+    enable: false
+    weight: -0.1          # Negative weight to penalize low diversity
+    min_std_threshold: 0.01  # Minimum action std to avoid penalty
+
+# Model parameters - OPTIMIZED FOR HALO=1
+model:
+  learning_rate: 0.001
+  buffer_size: 50_000  # REDUCED from 5M to 50K to prevent memory issues with halo=1
+  weight_decay: 0.00001  # Add L2 regularization
+  batch_size: 32
+  tau: 0.01
+  gamma: 0.995
+  train_freq: 300
+  gradient_steps: 64
+  action_noise:
+    initial_sigma: 0.1    # Starting noise level - higher for better initial exploration
+    final_sigma: 0.01    # Final noise level - low but non-zero to maintain some exploration
+    decay_episodes: 400   # Number of episodes to decay from initial to final (50% of total episodes)
+    decay_type: "exponential"  # "linear", "exponential", or "polynomial"
+
+# Field shift parameters
+field_shift:
+  enable: true
+  dt: 0.0765  # Time step for shifting
+  domain_size:
+    Lx: 2.67  # Domain length in x direction
+    Ly: 0.8   # Domain length in y direction
+
+# Training parameters
+training:
+  start_episode_length: 1800  # Fixed episode length in steps - all episodes have exactly this many steps
+  save_freq: 3600
+  gradient_clip: 1.0  # Enable gradient clipping
+  xavier_init_gain: 1.5  # Higher gain for Xavier initialization
+  gradient_monitoring:
+    enable: true
+    log_frequency: 100          # Log gradient metrics every N training steps
+    explosion_threshold: 10.0   # Gradient norm threshold for explosion detection
+    vanishing_threshold: 1e-6   # Minimum gradient norm for vanishing detection
+    adaptive_clipping: true     # Dynamically adjust gradient clipping
+    lr_reduction_factor: 0.8    # Factor to reduce LR when gradients explode
+    track_layer_wise: true      # Track gradients for individual layers
+
+# Memory usage for halo=1:
+# - Agents: 64x64 = 4,096
+# - Observation per agent: 3x3x2 = 18 values
+# - Buffer memory: 50,000 × 4,096 × 18 × 4 bytes = ~14.6 GB (reasonable)
+# - Compared to original: 5,000,000 × 4,096 × 18 × 4 bytes = ~1.37 TiB (impossible)

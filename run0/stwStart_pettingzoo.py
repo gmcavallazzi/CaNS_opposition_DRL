@@ -1,4 +1,5 @@
 import os
+import sys
 import torch
 import torch.optim as optim
 import torch.nn as nn
@@ -95,25 +96,53 @@ def train_maddpg(
     
     # Get agent list and sample observation/action spaces
     agents = env.possible_agents
-    obs_shape = env.observation_spaces[agents[0]].shape
+    actor_obs_shape = env.observation_spaces[agents[0]].shape  # Halo-based observation for actors
     act_shape = env.action_spaces[agents[0]].shape
     num_agents = len(agents)
-    
+
+    # For critics, use full grid observation (regardless of halo)
+    grid_size = config['grid']['target']['i']
+    critic_obs_shape = (grid_size, grid_size, 2)  # Full grid for critic
+
     print(f"Environment created with {num_agents} agents")
-    print(f"Observation shape: {obs_shape}, Action shape: {act_shape}")
-    
+    print(f"Actor observation shape: {actor_obs_shape}, Critic observation shape: {critic_obs_shape}")
+    print(f"Action shape: {act_shape}")
+
     # Extract training parameters from config
     max_steps = config['total_timesteps']
     batch_size = config['model']['batch_size']
-    gradient_steps = config['model']['gradient_steps'] 
+    gradient_steps = config['model']['gradient_steps']
     train_freq = config['model']['train_freq']
     save_freq = config['training']['save_freq']
+    buffer_size = config['model']['buffer_size']
+
+    # Check memory requirements for halo implementation
+    actor_obs_size = np.prod(actor_obs_shape)
+    estimated_memory_gb = buffer_size * num_agents * actor_obs_size * 4 / (1024**3)
+
+    print(f"\nMemory usage estimation:")
+    print(f"- Buffer size: {buffer_size:,}")
+    print(f"- Actor obs size per agent: {actor_obs_size}")
+    print(f"- Estimated replay buffer memory: {estimated_memory_gb:.2f} GB")
+
+    if estimated_memory_gb > 50:  # Warn if over 50 GB
+        print(f"\n⚠️  WARNING: High memory usage detected!")
+        print(f"   Estimated memory: {estimated_memory_gb:.1f} GB")
+        print(f"   Consider using config_halo.yaml for halo={config.get('halo', 0)} implementation")
+        print(f"   Or reduce buffer_size in config from {buffer_size:,} to ~{int(50 * 1024**3 / (num_agents * actor_obs_size * 4)):,}")
+
+        if estimated_memory_gb > 200:  # Error if over 200 GB
+            print(f"\n❌ ERROR: Memory requirement too high ({estimated_memory_gb:.1f} GB)")
+            print(f"   This will likely cause allocation errors. Please:")
+            print(f"   1. Use config_halo.yaml instead")
+            print(f"   2. Or set buffer_size to ~{int(8 * 1024**3 / (num_agents * actor_obs_size * 4)):,} for 8GB limit")
+            sys.exit(1)
     
     
     # Create shared policy MADDPG trainer
     maddpg = SharedPolicyMADDPG(
         agents=agents,
-        obs_shape=obs_shape,
+        obs_shape=actor_obs_shape,  # Use actor observation shape for actor networks
         act_shape=act_shape,
         gamma=config['model']['gamma'],
         tau=config['model']['tau'],
@@ -124,14 +153,13 @@ def train_maddpg(
         qf_arch=config.get('net_arch', {}).get('qf', [64, 64, 64]),
         qf_conv=config.get('net_arch', {}).get('qf_conv', None),
         qf_mlp=config.get('net_arch', {}).get('qf_mlp', None),
-        grid_size=config['grid']['target']['i'],  # Assuming square grid
+        grid_size=config['grid']['target']['i'],  # Critic uses full grid size
         gradient_clip=config['training']['gradient_clip'],
         xavier_init_gain=config['training']['xavier_init_gain']
     )
     
     # Initialize replay buffer - always use the optimized batched buffer
-    buffer_size = config['model']['buffer_size']
-    replay_buffer = BatchedReplayBuffer(buffer_size, obs_shape, act_shape, num_agents, agents)
+    replay_buffer = BatchedReplayBuffer(buffer_size, actor_obs_shape, act_shape, num_agents, agents)
     
     # Resume from checkpoint if provided
     total_steps = 0

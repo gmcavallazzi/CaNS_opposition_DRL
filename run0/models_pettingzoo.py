@@ -347,6 +347,9 @@ class SharedPolicyMADDPG:
         """
         Convert batched agent data to spatial field format for ConvCritic.
 
+        For halo=0: extracts u,w values directly from each agent's observation.
+        For halo>0: extracts center values from each agent's halo observation (agent's own position).
+
         Args:
             obs_batch: [batch_size, n_agents * obs_dim] - flattened observations
             act_batch: [batch_size, n_agents * act_dim] - flattened actions
@@ -357,13 +360,29 @@ class SharedPolicyMADDPG:
         """
         batch_size = obs_batch.size(0)
 
-        # Reshape observations: [batch_size, n_agents, obs_dim] -> [batch_size, n_agents, 1, 1, 2]
+        # Reshape observations: [batch_size, n_agents, obs_dim]
         obs_per_agent = obs_batch.view(batch_size, self.n_agents, -1)
 
-        # Extract u and w components (assuming each agent obs has 2 channels at position [0,0])
-        # obs_per_agent: [batch_size, n_agents, 2] for halo=0 case
-        u_values = obs_per_agent[:, :, 0]  # [batch_size, n_agents]
-        w_values = obs_per_agent[:, :, 1]  # [batch_size, n_agents]
+        # Extract u and w components from observation
+        if obs_per_agent.size(-1) == 2:
+            # halo=0 case: each agent obs has 2 channels (u, w) at its position
+            u_values = obs_per_agent[:, :, 0]  # [batch_size, n_agents]
+            w_values = obs_per_agent[:, :, 1]  # [batch_size, n_agents]
+        else:
+            # halo>0 case: each agent obs has shape (2*halo+1, 2*halo+1, 2)
+            # Extract center values (agent's own position)
+            obs_dim = obs_per_agent.size(-1)
+            channels = 2
+            halo_size = int((obs_dim // channels) ** 0.5)  # Compute halo size from obs_dim
+            center_idx = halo_size // 2  # Center position in the halo grid
+
+            # Reshape to (batch_size, n_agents, halo_size, halo_size, 2)
+            obs_spatial = obs_per_agent.view(batch_size, self.n_agents, halo_size, halo_size, channels)
+
+            # Extract center values: [batch_size, n_agents, 2]
+            center_obs = obs_spatial[:, :, center_idx, center_idx, :]  # [batch_size, n_agents, 2]
+            u_values = center_obs[:, :, 0]  # [batch_size, n_agents]
+            w_values = center_obs[:, :, 1]  # [batch_size, n_agents]
 
         # Reshape to spatial grid
         u_field = u_values.view(batch_size, self.grid_size, self.grid_size)  # [batch_size, 64, 64]
