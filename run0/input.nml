@@ -1,6 +1,6 @@
 &dns
-ng(1:3) = 192, 192, 100
-l(1:3) = 12.567, 4.189, 1.
+ng(1:3) = 64, 64, 100
+l(1:3) = 2.67, 0.8, 1.
 gtype = 2, gr = 1.5
 cfl = 0.35, dtmax = 0.06, dt_f = 0.0085
 visci = 2870.
@@ -10,7 +10,7 @@ nstep = 100000000, time_max = 1000000., tw_max = 0.1
 stop_type(1:3) = T, F, F
 restart = T, is_overwrite_save = T
 nsaves_max = 10
-icheck = 10, iout0d = 20, iout1d = 0, iout2d = 0, iout3d = 1000, isave = 0
+icheck = 10, iout0d = 20, iout1d = 0, iout2d = 0, iout3d = 100000, isave = 0
 cbcvel(0:1,1:3,1) = 'P','P',  'P','P',  'D','N'
 cbcvel(0:1,1:3,2) = 'P','P',  'P','P',  'D','N'
 cbcvel(0:1,1:3,3) = 'P','P',  'P','P',  'D','D'

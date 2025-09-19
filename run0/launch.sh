@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH -D /users/addh496/sharedscratch/CaNS_DRL2.4_shift/run0
-#SBATCH -J run0
+#SBATCH -J run0cc
 #SBATCH --nodes=2
 #SBATCH --ntasks-per-node=33
 #SBATCH --time=72:00:00
