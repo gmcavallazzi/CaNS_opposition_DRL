@@ -126,8 +126,8 @@ def check_gradient_health(metrics: dict, config: dict) -> tuple:
         (is_exploding, is_vanishing, suggested_clip_value)
     """
     grad_config = config.get('training', {}).get('gradient_monitoring', {})
-    explosion_threshold = grad_config.get('explosion_threshold', 10.0)
-    vanishing_threshold = grad_config.get('vanishing_threshold', 1e-6)
+    explosion_threshold = float(grad_config.get('explosion_threshold', 10.0))
+    vanishing_threshold = float(grad_config.get('vanishing_threshold', 1e-6))
 
     global_norm = metrics.get('global_norm', 0.0)
 
