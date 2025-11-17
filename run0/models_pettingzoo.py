@@ -4,160 +4,118 @@ import torch.nn.functional as F
 import torch.optim as optim
 import numpy as np
 from typing import Dict, Tuple, List, Optional, Any
-from collections import defaultdict
 
-# MLP-based actor network
-class MLPActor(nn.Module):
-    """MLP-based actor network."""
-    def __init__(self, obs_shape: Tuple[int, ...], act_shape: Tuple[int, ...], 
-                 dropout_rate: float = 0.05, hidden_layers: List[int] = None):
+# ============================================================================
+# CNN-based Actor for Patch Control
+# ============================================================================
+
+class CNNActor(nn.Module):
+    """
+    CNN-based actor network for patch-based flow control.
+    Each agent observes a 8x8 patch with 2 channels (u, w velocities)
+    and outputs an 8x8 grid of actions.
+    """
+    def __init__(self, conv_channels: List[int] = None, dropout_rate: float = 0.05):
         super().__init__()
-        
-        # Calculate flattened input size
-        self.obs_dim = int(np.prod(obs_shape))
-        self.act_dim = int(np.prod(act_shape))
-        
-        # Use provided architecture or default
-        if hidden_layers is None:
-            hidden_layers = [128, 64, 32]  # Enhanced architecture
-        
-        # Build the network layers dynamically
-        layers = [nn.Flatten()]
-        
-        # Input layer
-        prev_dim = self.obs_dim
-        
-        # Add layer normalization after input
-        layers.append(nn.LayerNorm(prev_dim))
-        
-        # Hidden layers
-        for h_dim in hidden_layers:
-            layers.append(nn.Linear(prev_dim, h_dim))
-            layers.append(nn.LayerNorm(h_dim))  # Layer normalization
-            layers.append(nn.ReLU())
-            layers.append(nn.Dropout(dropout_rate))
-            prev_dim = h_dim
-        
-        # Output layer with tanh activation
-        self.output_layer = nn.Linear(prev_dim, self.act_dim)
-        
-        # Create the network
-        self.net = nn.Sequential(*layers)
-        
+
+        # Default encoder-decoder architecture
+        if conv_channels is None:
+            conv_channels = [16, 32]  # Encoder channels
+
+        # Encoder: Extract spatial features from input
+        encoder_layers = []
+        in_channels = 2  # u, w velocities
+
+        for out_channels in conv_channels:
+            encoder_layers.extend([
+                nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
+                nn.BatchNorm2d(out_channels),
+                nn.ReLU(),
+                nn.Dropout2d(dropout_rate)
+            ])
+            in_channels = out_channels
+
+        self.encoder = nn.Sequential(*encoder_layers)
+
+        # Decoder: Generate action field from features
+        decoder_layers = []
+        for i in range(len(conv_channels) - 1, -1, -1):
+            out_channels = conv_channels[i - 1] if i > 0 else 1
+            decoder_layers.extend([
+                nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
+                nn.BatchNorm2d(out_channels) if out_channels > 1 else nn.Identity(),
+                nn.ReLU() if out_channels > 1 else nn.Identity(),
+                nn.Dropout2d(dropout_rate) if out_channels > 1 else nn.Identity()
+            ])
+            in_channels = out_channels
+
+        self.decoder = nn.Sequential(*decoder_layers)
+
         # Initialize weights
         self.apply(self._init_weights)
-    
+
     def _init_weights(self, module):
-        if isinstance(module, nn.Linear):
-            if module == self.output_layer:  # Output layer
-                nn.init.uniform_(module.weight, -0.003, 0.003)
-                if module.bias is not None:
-                    nn.init.uniform_(module.bias, -0.003, 0.003)
-            else:  # Hidden layers
-                nn.init.xavier_uniform_(module.weight, gain=1.5)
-                if module.bias is not None:
-                    nn.init.constant_(module.bias, 0.0)
-        elif isinstance(module, nn.LayerNorm):
+        if isinstance(module, nn.Conv2d):
+            # Use smaller initialization for stability
+            # Last layer in decoder will be initialized with small values
+            nn.init.xavier_uniform_(module.weight, gain=0.01 if module.out_channels == 1 else 1.0)
+            if module.bias is not None:
+                nn.init.constant_(module.bias, 0.0)
+        elif isinstance(module, nn.BatchNorm2d):
             nn.init.constant_(module.weight, 1.0)
             nn.init.constant_(module.bias, 0.0)
-    
+
     def forward(self, obs: torch.Tensor) -> torch.Tensor:
-        x = self.net(obs)
-        x = self.output_layer(x)
-        return torch.tanh(x)  # Explicit tanh activation for final output
+        """
+        Forward pass.
 
-# MLP-based critic network
-class MLPCritic(nn.Module):
-    """MLP-based critic network that takes observation and action of all agents."""
-    def __init__(self, obs_shape: Tuple[int, ...], act_shape: Tuple[int, ...], 
-                 n_agents: int, dropout_rate: float = 0.05, hidden_layers: List[int] = None):
-        super().__init__()
-        
-        # Calculate flattened input sizes
-        self.obs_dim = int(np.prod(obs_shape))
-        self.act_dim = int(np.prod(act_shape))
-        
-        # Total input size is observations and actions from all agents
-        self.input_dim = self.obs_dim * n_agents + self.act_dim * n_agents
-        
-        # Use provided architecture or default
-        if hidden_layers is None:
-            hidden_layers = [128, 64, 32]  # Enhanced architecture
-        
-        # Build the network layers dynamically
-        layers = []
-        
-        # Add layer normalization after input
-        layers.append(nn.LayerNorm(self.input_dim))
-        
-        # Input layer
-        prev_dim = self.input_dim
-        
-        # Hidden layers
-        for h_dim in hidden_layers:
-            layers.append(nn.Linear(prev_dim, h_dim))
-            layers.append(nn.LayerNorm(h_dim))  # Layer normalization
-            layers.append(nn.ReLU())
-            layers.append(nn.Dropout(dropout_rate))
-            prev_dim = h_dim
-        
-        # Output layer
-        self.output_layer = nn.Linear(prev_dim, 1)  # Q-value output
-        
-        # Create the network
-        self.net = nn.Sequential(*layers)
-        
-        # Initialize weights
-        self.apply(self._init_weights)
-    
-    def _init_weights(self, module):
-        if isinstance(module, nn.Linear):
-            if module == self.output_layer:  # Output layer
-                nn.init.uniform_(module.weight, -0.003, 0.003)
-                if module.bias is not None:
-                    nn.init.uniform_(module.bias, -0.003, 0.003)
-            else:  # Hidden layers
-                nn.init.xavier_uniform_(module.weight, gain=1.5)
-                if module.bias is not None:
-                    nn.init.constant_(module.bias, 0.0)
-        elif isinstance(module, nn.LayerNorm):
-            nn.init.constant_(module.weight, 1.0)
-            nn.init.constant_(module.bias, 0.0)
-    
-    def forward(self, obs_all: torch.Tensor, act_all: torch.Tensor) -> torch.Tensor:
-        # Combine all observations and actions
-        x = torch.cat([obs_all, act_all], dim=1)
-        x = self.net(x)
-        return self.output_layer(x)
+        Args:
+            obs: [batch_size, 2, 8, 8] - velocity observations
 
-# Convolutional critic for spatial data
-class ConvCritic(nn.Module):
+        Returns:
+            actions: [batch_size, 8, 8] - action grid in [-1, 1]
+        """
+        # Encode spatial features
+        features = self.encoder(obs)
+
+        # Decode to action field
+        actions = self.decoder(features)
+
+        # Apply tanh and squeeze channel dimension
+        actions = torch.tanh(actions.squeeze(1))  # [batch_size, 8, 8]
+
+        return actions
+
+
+# ============================================================================
+# CNN-based Critic for Global State Evaluation
+# ============================================================================
+
+class CNNCritic(nn.Module):
     """
-    Convolutional critic network for processing spatial 2D fields.
-    Designed for 64x64 grids with 2 channels (u, w velocity fields).
+    Convolutional critic network for processing full spatial fields.
+    Processes 64x64 grids with 3 channels (u, w observations + actions).
     """
-    def __init__(self, grid_size: int = 64, conv_channels: List[int] = None,
+    def __init__(self, conv_channels: List[int] = None,
                  mlp_layers: List[int] = None, dropout_rate: float = 0.05):
         super().__init__()
 
-        self.grid_size = grid_size
-
         # Default architectures
         if conv_channels is None:
-            conv_channels = [32, 64, 32]  # 3 conv layers
+            conv_channels = [32, 64, 32]
         if mlp_layers is None:
-            mlp_layers = [256, 128]  # 2 MLP layers
+            mlp_layers = [256, 128]
 
         # Convolutional layers for spatial processing
         conv_layers = []
-        in_channels = 3  # 2 for observations (u,w) + 1 for actions
+        in_channels = 3  # 2 for u,w + 1 for actions
 
         for out_channels in conv_channels:
             conv_layers.extend([
                 nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
                 nn.BatchNorm2d(out_channels),
                 nn.ReLU(),
-                nn.MaxPool2d(2, 2),  # Reduce spatial dimensions by 2
+                nn.MaxPool2d(2, 2),  # Reduce spatial dimensions
                 nn.Dropout2d(dropout_rate)
             ])
             in_channels = out_channels
@@ -165,17 +123,15 @@ class ConvCritic(nn.Module):
         self.conv_net = nn.Sequential(*conv_layers)
 
         # Calculate flattened size after convolutions
-        # After 3 pooling operations: 64 -> 32 -> 16 -> 8
-        final_spatial_size = grid_size // (2 ** len(conv_channels))
+        # 64x64 -> 32x32 -> 16x16 -> 8x8 (3 pooling operations)
+        final_spatial_size = 64 // (2 ** len(conv_channels))
         conv_output_size = conv_channels[-1] * (final_spatial_size ** 2)
 
-        # MLP layers for final processing
+        # MLP layers for final Q-value prediction
         mlp_layers_full = []
+        mlp_layers_full.append(nn.LayerNorm(conv_output_size))
+
         prev_dim = conv_output_size
-
-        # Add layer normalization after flattening
-        mlp_layers_full.append(nn.LayerNorm(prev_dim))
-
         for h_dim in mlp_layers:
             mlp_layers_full.extend([
                 nn.Linear(prev_dim, h_dim),
@@ -185,21 +141,22 @@ class ConvCritic(nn.Module):
             ])
             prev_dim = h_dim
 
+        self.mlp_net = nn.Sequential(*mlp_layers_full)
+
         # Output layer
         self.output_layer = nn.Linear(prev_dim, 1)
-        self.mlp_net = nn.Sequential(*mlp_layers_full)
 
         # Initialize weights
         self.apply(self._init_weights)
 
     def _init_weights(self, module):
         if isinstance(module, (nn.Linear, nn.Conv2d)):
-            if module == self.output_layer:  # Output layer
+            if module == self.output_layer:
                 nn.init.uniform_(module.weight, -0.003, 0.003)
                 if module.bias is not None:
                     nn.init.uniform_(module.bias, -0.003, 0.003)
-            else:  # Hidden layers
-                nn.init.xavier_uniform_(module.weight, gain=1.5)
+            else:
+                nn.init.xavier_uniform_(module.weight, gain=1.0)
                 if module.bias is not None:
                     nn.init.constant_(module.bias, 0.0)
         elif isinstance(module, (nn.LayerNorm, nn.BatchNorm2d)):
@@ -208,17 +165,17 @@ class ConvCritic(nn.Module):
 
     def forward(self, obs_fields: torch.Tensor, act_field: torch.Tensor) -> torch.Tensor:
         """
-        Forward pass for convolutional critic.
+        Forward pass.
 
         Args:
-            obs_fields: [batch_size, 2, grid_size, grid_size] - u,w velocity fields
-            act_field: [batch_size, 1, grid_size, grid_size] - action field
+            obs_fields: [batch_size, 2, 64, 64] - u,w velocity fields
+            act_field: [batch_size, 1, 64, 64] - action field
 
         Returns:
             Q-values: [batch_size, 1]
         """
-        # Combine observations and actions: [batch_size, 3, 64, 64]
-        x = torch.cat([obs_fields, act_field], dim=1)
+        # Combine observations and actions
+        x = torch.cat([obs_fields, act_field], dim=1)  # [batch_size, 3, 64, 64]
 
         # Apply convolutional layers
         x = self.conv_net(x)
@@ -232,278 +189,308 @@ class ConvCritic(nn.Module):
         # Output Q-value
         return self.output_layer(x)
 
+
+# ============================================================================
+# Smoothness Loss Functions
+# ============================================================================
+
+def temporal_smoothness_loss(actions_t: torch.Tensor, actions_t_prev: torch.Tensor) -> torch.Tensor:
+    """
+    Compute temporal smoothness penalty: ||a(t) - a(t-1)||^2
+
+    Args:
+        actions_t: Current actions [batch_size, n_agents, 8, 8]
+        actions_t_prev: Previous actions [batch_size, n_agents, 8, 8]
+
+    Returns:
+        Scalar loss value
+    """
+    return torch.mean((actions_t - actions_t_prev) ** 2)
+
+
+def spatial_smoothness_loss(actions: torch.Tensor) -> torch.Tensor:
+    """
+    Compute spatial smoothness penalty using finite differences.
+    Penalizes large gradients within each 8x8 patch.
+
+    Args:
+        actions: [batch_size, n_agents, 8, 8]
+
+    Returns:
+        Scalar loss value
+    """
+    # Compute gradients in x and y directions using finite differences
+    grad_x = actions[:, :, :, 1:] - actions[:, :, :, :-1]  # [batch, n_agents, 8, 7]
+    grad_y = actions[:, :, 1:, :] - actions[:, :, :-1, :]  # [batch, n_agents, 7, 8]
+
+    # Sum of squared gradients
+    loss_x = torch.mean(grad_x ** 2)
+    loss_y = torch.mean(grad_y ** 2)
+
+    return loss_x + loss_y
+
+
+def zero_mean_loss(actions: torch.Tensor) -> torch.Tensor:
+    """
+    Compute zero-mean penalty: mean(a)^2 per agent.
+
+    Args:
+        actions: [batch_size, n_agents, 8, 8]
+
+    Returns:
+        Scalar loss value
+    """
+    # Compute mean per agent (average over the 8x8 grid)
+    mean_per_agent = actions.mean(dim=(2, 3))  # [batch_size, n_agents]
+
+    return torch.mean(mean_per_agent ** 2)
+
+
+# ============================================================================
+# Shared Policy MADDPG with Smooth Control
+# ============================================================================
+
 class SharedPolicyMADDPG:
     """
-    Multi-Agent Deep Deterministic Policy Gradient with shared policies.
-    All agents share the same policy network weights.
+    Multi-Agent DDPG with shared CNN policies and smoothness constraints.
+    All agents share the same actor network.
     """
     def __init__(
         self,
         agents: List[str],
-        obs_shape: Tuple[int, ...],
-        act_shape: Tuple[int, ...],
-        gamma: float = 0.99,
+        gamma: float = 0.995,
         tau: float = 0.01,
-        lr: float = 1e-4,  # Reduced learning rate
-        dropout_rate: float = 0.05,  # Reduced dropout
-        weight_decay: float = 1e-5,  # Added L2 regularization
+        lr: float = 1e-3,
+        dropout_rate: float = 0.05,
+        weight_decay: float = 1e-5,
         device: str = "cpu",
-        pi_arch: List[int] = None,
-        qf_arch: List[int] = None,
-        qf_conv: List[int] = None,  # Conv architecture for spatial critic
-        qf_mlp: List[int] = None,   # MLP architecture for spatial critic
-        grid_size: int = 64,        # Grid size for spatial data
+        actor_channels: List[int] = None,
+        critic_conv_channels: List[int] = None,
+        critic_mlp_layers: List[int] = None,
         gradient_clip: float = 1.0,
-        xavier_init_gain: float = 1.5
+        lambda_temporal: float = 0.1,
+        lambda_spatial: float = 0.05,
+        lambda_zero: float = 0.01
     ):
         self.agents = agents
-        self.n_agents = len(agents)  # This line must come before using self.n_agents
+        self.n_agents = len(agents)
         self.device = device
         self.gamma = gamma
         self.tau = tau
-        self.obs_shape = obs_shape
-        self.act_shape = act_shape
         self.weight_decay = weight_decay
         self.gradient_clip = gradient_clip
-        self.xavier_init_gain = xavier_init_gain
-        self.grid_size = grid_size
 
-        # Network architectures
-        if pi_arch is None:
-            pi_arch = [128, 64, 32]  # Updated architecture
-        if qf_arch is None:
-            qf_arch = [128, 64, 32]  # Updated architecture
+        # Smoothness penalty weights
+        self.lambda_temporal = lambda_temporal
+        self.lambda_spatial = lambda_spatial
+        self.lambda_zero = lambda_zero
 
-        # Determine if using convolutional critic
-        self.use_conv_critic = qf_conv is not None
+        # Default architectures
+        if actor_channels is None:
+            actor_channels = [16, 32]
+        if critic_conv_channels is None:
+            critic_conv_channels = [32, 64, 32]
+        if critic_mlp_layers is None:
+            critic_mlp_layers = [256, 128]
 
-        if self.use_conv_critic:
-            if qf_mlp is None:
-                qf_mlp = [256, 128]  # Default MLP layers for conv critic
-            print(f"Using ConvCritic for spatial processing")
-            print(f"Conv channels: {qf_conv}")
-            print(f"MLP layers: {qf_mlp}")
-            print(f"Grid size: {grid_size}")
-        else:
-            print(f"Using MLP networks for all agents")
-            print(f"Actor architecture: {pi_arch}")
-            print(f"Critic architecture: {qf_arch}")
+        print(f"Initializing CNN-based MADDPG:")
+        print(f"  Number of agents: {self.n_agents}")
+        print(f"  Actor CNN channels: {actor_channels}")
+        print(f"  Critic conv channels: {critic_conv_channels}")
+        print(f"  Critic MLP layers: {critic_mlp_layers}")
+        print(f"  Smoothness penalties - temporal: {lambda_temporal}, spatial: {lambda_spatial}, zero-mean: {lambda_zero}")
 
         # Create networks
-        self.actor = MLPActor(obs_shape, act_shape, dropout_rate, pi_arch).to(device)
-        self.actor_target = MLPActor(obs_shape, act_shape, dropout_rate, pi_arch).to(device)
+        self.actor = CNNActor(actor_channels, dropout_rate).to(device)
+        self.actor_target = CNNActor(actor_channels, dropout_rate).to(device)
 
-        if self.use_conv_critic:
-            self.critic = ConvCritic(grid_size, qf_conv, qf_mlp, dropout_rate).to(device)
-            self.critic_target = ConvCritic(grid_size, qf_conv, qf_mlp, dropout_rate).to(device)
-        else:
-            self.critic = MLPCritic(obs_shape, act_shape, self.n_agents, dropout_rate, qf_arch).to(device)
-            self.critic_target = MLPCritic(obs_shape, act_shape, self.n_agents, dropout_rate, qf_arch).to(device)
-        
-        # Apply custom xavier initialization
-        self.actor.apply(lambda m: self._init_weights_with_gain(m))
-        self.critic.apply(lambda m: self._init_weights_with_gain(m))
+        self.critic = CNNCritic(critic_conv_channels, critic_mlp_layers, dropout_rate).to(device)
+        self.critic_target = CNNCritic(critic_conv_channels, critic_mlp_layers, dropout_rate).to(device)
 
-        # Initialize target networks with same weights
+        # Initialize target networks
         self.actor_target.load_state_dict(self.actor.state_dict())
         self.critic_target.load_state_dict(self.critic.state_dict())
-        
-        # Setup optimizers with weight decay
+
+        # Setup optimizers
         self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=lr, weight_decay=weight_decay)
         self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=lr, weight_decay=weight_decay)
 
-    def _init_weights_with_gain(self, module):
-        """Initialize weights with configurable xavier gain."""
-        if isinstance(module, nn.Linear):
-            if hasattr(module, 'is_output_layer') and module.is_output_layer:
-                # Output layer - keep small initialization
-                nn.init.uniform_(module.weight, -0.003, 0.003)
-                if module.bias is not None:
-                    nn.init.uniform_(module.bias, -0.003, 0.003)
-            else:
-                # Hidden layers - use configurable xavier gain
-                nn.init.xavier_uniform_(module.weight, gain=self.xavier_init_gain)
-                if module.bias is not None:
-                    nn.init.constant_(module.bias, 0.0)
-        elif isinstance(module, nn.LayerNorm):
-            nn.init.constant_(module.weight, 1.0)
-            nn.init.constant_(module.bias, 0.0)
-    
-    
-    def select_action(self, agent_id: str, obs: torch.Tensor) -> np.ndarray:
-        """Select action for a specific agent given its observation."""
-        with torch.no_grad():
-            action = self.actor(obs).cpu().numpy()
-        return action
-    
     def select_actions_batched(self, all_obs: torch.Tensor) -> np.ndarray:
-        """Select actions for all agents in a single batched forward pass."""
+        """
+        Select actions for all agents in a batched forward pass.
+
+        Args:
+            all_obs: [n_agents, 2, 8, 8] - observations for all agents
+
+        Returns:
+            all_actions: [n_agents, 8, 8] - actions for all agents
+        """
         with torch.no_grad():
-            # Process all observations in a single forward pass
             all_actions = self.actor(all_obs).cpu().numpy()
         return all_actions
 
-    def _prepare_spatial_data(self, obs_batch: torch.Tensor, act_batch: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def update_batched(self, batch: Dict[str, torch.Tensor]) -> Tuple[float, float, Dict[str, float]]:
         """
-        Convert batched agent data to spatial field format for ConvCritic.
-
-        For halo=0: extracts u,w values directly from each agent's observation.
-        For halo>0: extracts center values from each agent's halo observation (agent's own position).
-
-        Args:
-            obs_batch: [batch_size, n_agents * obs_dim] - flattened observations
-            act_batch: [batch_size, n_agents * act_dim] - flattened actions
+        Update actor and critic networks using a batch of experiences.
 
         Returns:
-            obs_fields: [batch_size, 2, grid_size, grid_size] - u,w velocity fields
-            act_field: [batch_size, 1, grid_size, grid_size] - action field
+            critic_loss, actor_loss, loss_breakdown (dict with smoothness components)
         """
+        obs_batch = batch['obs']             # [batch_size, n_agents, 2, 8, 8]
+        act_batch = batch['acts']            # [batch_size, n_agents, 8, 8]
+        prev_act_batch = batch['prev_acts']  # [batch_size, n_agents, 8, 8]
+        rew_batch = batch['rews']            # [batch_size, n_agents]
+        next_obs_batch = batch['next_obs']   # [batch_size, n_agents, 2, 8, 8]
+        done_batch = batch['done']           # [batch_size, n_agents]
+
         batch_size = obs_batch.size(0)
 
-        # Reshape observations: [batch_size, n_agents, obs_dim]
-        obs_per_agent = obs_batch.view(batch_size, self.n_agents, -1)
+        # ========================================================================
+        # Update Critic
+        # ========================================================================
 
-        # Extract u and w components from observation
-        if obs_per_agent.size(-1) == 2:
-            # halo=0 case: each agent obs has 2 channels (u, w) at its position
-            u_values = obs_per_agent[:, :, 0]  # [batch_size, n_agents]
-            w_values = obs_per_agent[:, :, 1]  # [batch_size, n_agents]
-        else:
-            # halo>0 case: each agent obs has shape (2*halo+1, 2*halo+1, 2)
-            # Extract center values (agent's own position)
-            obs_dim = obs_per_agent.size(-1)
-            channels = 2
-            halo_size = int((obs_dim // channels) ** 0.5)  # Compute halo size from obs_dim
-            center_idx = halo_size // 2  # Center position in the halo grid
-
-            # Reshape to (batch_size, n_agents, halo_size, halo_size, 2)
-            obs_spatial = obs_per_agent.view(batch_size, self.n_agents, halo_size, halo_size, channels)
-
-            # Extract center values: [batch_size, n_agents, 2]
-            center_obs = obs_spatial[:, :, center_idx, center_idx, :]  # [batch_size, n_agents, 2]
-            u_values = center_obs[:, :, 0]  # [batch_size, n_agents]
-            w_values = center_obs[:, :, 1]  # [batch_size, n_agents]
-
-        # Reshape to spatial grid
-        u_field = u_values.view(batch_size, self.grid_size, self.grid_size)  # [batch_size, 64, 64]
-        w_field = w_values.view(batch_size, self.grid_size, self.grid_size)  # [batch_size, 64, 64]
-
-        # Stack into observation fields: [batch_size, 2, 64, 64]
-        obs_fields = torch.stack([u_field, w_field], dim=1)
-
-        # Reshape actions to spatial grid
-        act_values = act_batch.view(batch_size, self.n_agents)  # [batch_size, n_agents]
-        act_field = act_values.view(batch_size, 1, self.grid_size, self.grid_size)  # [batch_size, 1, 64, 64]
-
-        return obs_fields, act_field
-    
-    def update_batched(self, batch: Dict[str, torch.Tensor]) -> Tuple[float, float]:
-        """Update actor and critic networks using a batch of experiences (optimized for shared policy)."""
-        obs_batch = batch['obs']           # (batch_size, n_agents * obs_dim)
-        act_batch = batch['acts']          # (batch_size, n_agents * act_dim)
-        rew_batch = batch['rews']          # (batch_size, n_agents)
-        next_obs_batch = batch['next_obs'] # (batch_size, n_agents * obs_dim)
-        done_batch = batch['done']         # (batch_size, n_agents)
-        
-        batch_size = obs_batch.size(0)
-        
-        # Compute target Q-values (batched)
         with torch.no_grad():
-            # Reshape observations for target actor
-            next_obs_reshaped = self._reshape_obs_for_actor(next_obs_batch)
-            # Get next actions from target actor (batched)
-            next_actions = self.actor_target(next_obs_reshaped)
-            
-            # Add noise to next actions for smoothing
-            noise = torch.randn_like(next_actions) * 0.1
-            next_actions = torch.clamp(next_actions + noise, -1, 1)
-            
-            # Reshape for critic input
-            next_act_batch = self._reshape_actions_for_critic(next_actions)
-            
+            # Reshape for actor: [batch_size * n_agents, 2, 8, 8]
+            next_obs_flat = next_obs_batch.view(batch_size * self.n_agents, 2, 8, 8)
+
+            # Get next actions from target actor
+            next_actions_flat = self.actor_target(next_obs_flat)  # [batch*n_agents, 8, 8]
+            next_actions = next_actions_flat.view(batch_size, self.n_agents, 8, 8)
+
+            # Prepare spatial data for critic
+            next_obs_fields, next_act_field = self._prepare_spatial_data(
+                next_obs_batch, next_actions
+            )
+
             # Compute target Q-values
-            if self.use_conv_critic:
-                next_obs_fields, next_act_field = self._prepare_spatial_data(next_obs_batch, next_act_batch)
-                target_q = self.critic_target(next_obs_fields, next_act_field)
-            else:
-                target_q = self.critic_target(next_obs_batch, next_act_batch)
+            target_q = self.critic_target(next_obs_fields, next_act_field)
 
-            # Calculate targets for all agents
-            # We take the mean reward across all agents since they share the same policy
-            mean_reward = rew_batch.mean(dim=1, keepdim=True)
-            # Use any agent's done flag (all agents terminate together)
+            # Calculate TD target
+            mean_reward = rew_batch.mean(dim=1, keepdim=True)  # Shared reward
             done_flag = done_batch[:, 0].unsqueeze(-1)
-
             target_value = mean_reward + self.gamma * (1.0 - done_flag) * target_q
 
-        # Update critic (batched)
-        if self.use_conv_critic:
-            obs_fields, act_field = self._prepare_spatial_data(obs_batch, act_batch)
-            current_q = self.critic(obs_fields, act_field)
-        else:
-            current_q = self.critic(obs_batch, act_batch)
+        # Prepare current spatial data for critic
+        obs_fields, act_field = self._prepare_spatial_data(obs_batch, act_batch)
+
+        # Compute current Q-values
+        current_q = self.critic(obs_fields, act_field)
+
+        # Critic loss
         critic_loss = F.mse_loss(current_q, target_value)
-        
+
+        # Update critic
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
         torch.nn.utils.clip_grad_norm_(self.critic.parameters(), self.gradient_clip)
         self.critic_optimizer.step()
-        
-        # Update actor (batched)
+
+        # ========================================================================
+        # Update Actor
+        # ========================================================================
+
         # Reshape observations for actor
-        obs_reshaped = self._reshape_obs_for_actor(obs_batch)
-        
-        # Get actions from current policy (batched)
-        actions = self.actor(obs_reshaped)
-        
-        # Reshape for critic input
-        act_batch_new = self._reshape_actions_for_critic(actions)
-        
-        # Compute actor loss
-        if self.use_conv_critic:
-            obs_fields_new, act_field_new = self._prepare_spatial_data(obs_batch, act_batch_new)
-            actor_loss = -self.critic(obs_fields_new, act_field_new).mean()
-        else:
-            actor_loss = -self.critic(obs_batch, act_batch_new).mean()
-        
+        obs_flat = obs_batch.view(batch_size * self.n_agents, 2, 8, 8)
+
+        # Get actions from current policy
+        actions_flat = self.actor(obs_flat)  # [batch*n_agents, 8, 8]
+        actions = actions_flat.view(batch_size, self.n_agents, 8, 8)
+
+        # Prepare spatial data for critic
+        obs_fields_new, act_field_new = self._prepare_spatial_data(obs_batch, actions)
+
+        # Base actor loss: maximize Q-value
+        q_loss = -self.critic(obs_fields_new, act_field_new).mean()
+
+        # Temporal smoothness penalty
+        temporal_loss = temporal_smoothness_loss(actions, prev_act_batch)
+
+        # Spatial smoothness penalty
+        spatial_loss = spatial_smoothness_loss(actions)
+
+        # Zero-mean penalty
+        zero_loss = zero_mean_loss(actions)
+
+        # Combined actor loss
+        actor_loss = (q_loss +
+                     self.lambda_temporal * temporal_loss +
+                     self.lambda_spatial * spatial_loss +
+                     self.lambda_zero * zero_loss)
+
+        # Update actor
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
         torch.nn.utils.clip_grad_norm_(self.actor.parameters(), self.gradient_clip)
         self.actor_optimizer.step()
-        
+
         # Update target networks
         self._soft_update(self.actor, self.actor_target)
         self._soft_update(self.critic, self.critic_target)
-        
-        return critic_loss.item(), actor_loss.item()
-        
-    def _reshape_obs_for_actor(self, obs_batch: torch.Tensor) -> torch.Tensor:
-        """Reshape observation batch for actor network."""
+
+        # Loss breakdown for logging
+        loss_breakdown = {
+            'q_loss': q_loss.item(),
+            'temporal_loss': temporal_loss.item(),
+            'spatial_loss': spatial_loss.item(),
+            'zero_loss': zero_loss.item()
+        }
+
+        return critic_loss.item(), actor_loss.item(), loss_breakdown
+
+    def _prepare_spatial_data(
+        self,
+        obs_batch: torch.Tensor,
+        act_batch: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Convert patch-based data to full spatial fields for critic.
+
+        Args:
+            obs_batch: [batch_size, n_agents, 2, 8, 8] - observations
+            act_batch: [batch_size, n_agents, 8, 8] - actions
+
+        Returns:
+            obs_fields: [batch_size, 2, 64, 64] - full velocity fields
+            act_field: [batch_size, 1, 64, 64] - full action field
+        """
         batch_size = obs_batch.size(0)
-        obs_dim = int(np.prod(self.obs_shape))
-        
-        # Reshape to [batch_size, n_agents, obs_dim]
-        reshaped = obs_batch.view(batch_size, self.n_agents, obs_dim)
-        # Flatten batch and agents dimensions
-        reshaped = reshaped.view(batch_size * self.n_agents, obs_dim)
-        return reshaped
-            
-    def _reshape_actions_for_critic(self, actions: torch.Tensor) -> torch.Tensor:
-        """Reshape actions from actor to format expected by critic."""
-        batch_size = actions.size(0) // self.n_agents
-        act_dim = actions.size(1)
-        
-        # Reshape to [batch_size, n_agents, act_dim]
-        reshaped = actions.view(batch_size, self.n_agents, act_dim)
-        # Flatten agent and action dimensions
-        reshaped = reshaped.view(batch_size, self.n_agents * act_dim)
-        return reshaped
-    
+
+        # Reconstruct full 64x64 fields from 8x8 patches
+        # Agents are arranged in 8x8 grid
+        obs_fields_u = torch.zeros(batch_size, 64, 64, device=obs_batch.device)
+        obs_fields_w = torch.zeros(batch_size, 64, 64, device=obs_batch.device)
+        act_fields = torch.zeros(batch_size, 64, 64, device=act_batch.device)
+
+        agent_idx = 0
+        for i in range(8):  # 8 patches in x
+            for j in range(8):  # 8 patches in y
+                # Extract patch from agent
+                obs_patch = obs_batch[:, agent_idx, :, :, :]  # [batch, 2, 8, 8]
+                act_patch = act_batch[:, agent_idx, :, :]     # [batch, 8, 8]
+
+                # Place in full field
+                x_start, x_end = i * 8, (i + 1) * 8
+                y_start, y_end = j * 8, (j + 1) * 8
+
+                obs_fields_u[:, x_start:x_end, y_start:y_end] = obs_patch[:, 0, :, :]
+                obs_fields_w[:, x_start:x_end, y_start:y_end] = obs_patch[:, 1, :, :]
+                act_fields[:, x_start:x_end, y_start:y_end] = act_patch
+
+                agent_idx += 1
+
+        # Stack observation fields
+        obs_fields = torch.stack([obs_fields_u, obs_fields_w], dim=1)  # [batch, 2, 64, 64]
+        act_field = act_fields.unsqueeze(1)  # [batch, 1, 64, 64]
+
+        return obs_fields, act_field
+
     def _soft_update(self, source: nn.Module, target: nn.Module):
         """Soft update of target network parameters."""
         for target_param, source_param in zip(target.parameters(), source.parameters()):
-            target_param.data.copy_((1 - self.tau) * target_param.data + self.tau * source_param.data)
-    
+            target_param.data.copy_(
+                (1 - self.tau) * target_param.data + self.tau * source_param.data
+            )
+
     def state_dict(self) -> Dict[str, Any]:
         """Get state dictionary for saving."""
         return {
@@ -514,7 +501,7 @@ class SharedPolicyMADDPG:
             'actor_optimizer': self.actor_optimizer.state_dict(),
             'critic_optimizer': self.critic_optimizer.state_dict(),
         }
-    
+
     def load_state_dict(self, state_dict: Dict[str, Any]):
         """Load state dictionary."""
         self.actor.load_state_dict(state_dict['actor'])
@@ -524,108 +511,78 @@ class SharedPolicyMADDPG:
         self.actor_optimizer.load_state_dict(state_dict['actor_optimizer'])
         self.critic_optimizer.load_state_dict(state_dict['critic_optimizer'])
 
+
+# ============================================================================
+# Batched Replay Buffer with Previous Actions
+# ============================================================================
+
 class BatchedReplayBuffer:
     """
-    Optimized replay buffer for shared policy training.
-    Stores transitions more efficiently for large numbers of agents.
+    Replay buffer for shared policy training with smoothness penalties.
+    Stores previous actions for temporal smoothness computation.
     """
     def __init__(
-        self, 
-        capacity: int, 
-        obs_shape: Tuple[int, ...], 
-        act_shape: Tuple[int, ...],
+        self,
+        capacity: int,
         n_agents: int,
         agent_ids: List[str]
     ):
         self.capacity = capacity
-        self.obs_shape = obs_shape
-        self.act_shape = act_shape
         self.n_agents = n_agents
         self.agent_ids = agent_ids
-        
-        # Calculate flattened dimensions
-        self.obs_dim = int(np.prod(obs_shape))
-        self.act_dim = int(np.prod(act_shape))
-        
-        # Initialize buffers - store all agents' data together
-        self.obs_buf = np.zeros((capacity, n_agents, self.obs_dim), dtype=np.float32)
-        self.next_obs_buf = np.zeros((capacity, n_agents, self.obs_dim), dtype=np.float32)
-        self.acts_buf = np.zeros((capacity, n_agents, self.act_dim), dtype=np.float32)
+
+        # Each agent has 2x8x8=128 obs features and 8x8=64 action values
+        self.obs_dim = 128  # 2 * 8 * 8
+        self.act_dim = 64   # 8 * 8
+
+        # Initialize buffers
+        # Store spatial data directly
+        self.obs_buf = np.zeros((capacity, n_agents, 2, 8, 8), dtype=np.float32)
+        self.next_obs_buf = np.zeros((capacity, n_agents, 2, 8, 8), dtype=np.float32)
+        self.acts_buf = np.zeros((capacity, n_agents, 8, 8), dtype=np.float32)
+        self.prev_acts_buf = np.zeros((capacity, n_agents, 8, 8), dtype=np.float32)
         self.rews_buf = np.zeros((capacity, n_agents), dtype=np.float32)
         self.done_buf = np.zeros((capacity, n_agents), dtype=np.float32)
-        
+
         self.ptr = 0
         self.size = 0
-    
+
     def add_batch(
-        self, 
-        obs_batch: np.ndarray, 
-        acts_batch: np.ndarray,
-        rews_batch: np.ndarray,
-        next_obs_batch: np.ndarray,
-        dones_batch: np.ndarray
+        self,
+        obs_batch: np.ndarray,       # [n_agents, 2, 8, 8]
+        acts_batch: np.ndarray,      # [n_agents, 8, 8]
+        prev_acts_batch: np.ndarray, # [n_agents, 8, 8]
+        rews_batch: np.ndarray,      # [n_agents]
+        next_obs_batch: np.ndarray,  # [n_agents, 2, 8, 8]
+        dones_batch: np.ndarray      # [n_agents]
     ):
         """Add a batch of transitions to the buffer."""
-        self.obs_buf[self.ptr] = obs_batch.reshape(self.n_agents, self.obs_dim)
-        self.next_obs_buf[self.ptr] = next_obs_batch.reshape(self.n_agents, self.obs_dim)
-        self.acts_buf[self.ptr] = acts_batch.reshape(self.n_agents, self.act_dim)
+        self.obs_buf[self.ptr] = obs_batch
+        self.next_obs_buf[self.ptr] = next_obs_batch
+        self.acts_buf[self.ptr] = acts_batch
+        self.prev_acts_buf[self.ptr] = prev_acts_batch
         self.rews_buf[self.ptr] = rews_batch
         self.done_buf[self.ptr] = dones_batch
-        
+
         # Update pointer and size
         self.ptr = (self.ptr + 1) % self.capacity
         self.size = min(self.size + 1, self.capacity)
-    
-    def add(
-        self, 
-        obs: Dict[str, np.ndarray], 
-        acts: Dict[str, np.ndarray],
-        rews: Dict[str, float],
-        next_obs: Dict[str, np.ndarray],
-        dones: Dict[str, bool]
-    ):
-        """Add a transition to the buffer (compatible with original interface)."""
-        # Convert dictionaries to arrays
-        obs_batch = np.zeros((self.n_agents, self.obs_dim), dtype=np.float32)
-        next_obs_batch = np.zeros((self.n_agents, self.obs_dim), dtype=np.float32)
-        acts_batch = np.zeros((self.n_agents, self.act_dim), dtype=np.float32)
-        rews_batch = np.zeros(self.n_agents, dtype=np.float32)
-        dones_batch = np.zeros(self.n_agents, dtype=np.float32)
-        
-        for i, agent_id in enumerate(self.agent_ids):
-            # Flatten observation and action if needed
-            flat_obs = obs[agent_id].reshape(-1)
-            flat_next_obs = next_obs[agent_id].reshape(-1)
-            flat_act = acts[agent_id].reshape(-1)
-            
-            # Store in arrays
-            obs_batch[i] = flat_obs
-            next_obs_batch[i] = flat_next_obs
-            acts_batch[i] = flat_act
-            rews_batch[i] = rews[agent_id]
-            dones_batch[i] = float(dones[agent_id])
-        
-        # Add batch to buffer
-        self.add_batch(obs_batch, acts_batch, rews_batch, next_obs_batch, dones_batch)
-    
+
     def sample(self, batch_size: int, device: str = "cpu") -> Dict[str, torch.Tensor]:
         """Sample a batch of transitions."""
         idxs = np.random.randint(0, self.size, size=batch_size)
-        
-        # Create batch
+
         batch = {
-            # Reshape observations and actions for critic input
-            # (batch_size, n_agents * obs_dim) and (batch_size, n_agents * act_dim)
-            "obs": torch.as_tensor(self.obs_buf[idxs].reshape(batch_size, -1), device=device),
-            "next_obs": torch.as_tensor(self.next_obs_buf[idxs].reshape(batch_size, -1), device=device),
-            "acts": torch.as_tensor(self.acts_buf[idxs].reshape(batch_size, -1), device=device),
-            # Keep rewards and dones as (batch_size, n_agents)
+            "obs": torch.as_tensor(self.obs_buf[idxs], device=device),
+            "next_obs": torch.as_tensor(self.next_obs_buf[idxs], device=device),
+            "acts": torch.as_tensor(self.acts_buf[idxs], device=device),
+            "prev_acts": torch.as_tensor(self.prev_acts_buf[idxs], device=device),
             "rews": torch.as_tensor(self.rews_buf[idxs], device=device),
             "done": torch.as_tensor(self.done_buf[idxs], device=device)
         }
-        
+
         return batch
-    
+
     def save(self, path: str):
         """Save buffer state to disk."""
         np.savez(
@@ -633,35 +590,37 @@ class BatchedReplayBuffer:
             obs=self.obs_buf[:self.size],
             next_obs=self.next_obs_buf[:self.size],
             acts=self.acts_buf[:self.size],
+            prev_acts=self.prev_acts_buf[:self.size],
             rews=self.rews_buf[:self.size],
             done=self.done_buf[:self.size],
             ptr=self.ptr,
             size=self.size
         )
-    
+
     def load(self, path: str):
         """Load buffer state from disk."""
         data = np.load(path)
-        
-        # Check if shapes match
-        if data['obs'].shape[1:] != (self.n_agents, self.obs_dim):
-            raise ValueError(
-                f"Cannot load buffer with incompatible shapes. "
-                f"Expected ({self.n_agents}, {self.obs_dim}), got {data['obs'].shape[1:]}"
-            )
-        
+
         # Load data
         load_size = data['size'] if 'size' in data else len(data['obs'])
         self.obs_buf[:load_size] = data['obs']
         self.next_obs_buf[:load_size] = data['next_obs']
         self.acts_buf[:load_size] = data['acts']
+
+        # Handle backward compatibility
+        if 'prev_acts' in data:
+            self.prev_acts_buf[:load_size] = data['prev_acts']
+        else:
+            print("Warning: Loading old buffer without prev_acts, initializing to zeros")
+            self.prev_acts_buf[:load_size] = 0.0
+
         self.rews_buf[:load_size] = data['rews']
         self.done_buf[:load_size] = data['done']
         self.ptr = int(data['ptr']) if 'ptr' in data else load_size % self.capacity
         self.size = min(load_size, self.capacity)
-        
+
         print(f"Loaded buffer with {self.size} transitions")
-    
+
     @property
     def full(self) -> bool:
         """Check if buffer is full."""

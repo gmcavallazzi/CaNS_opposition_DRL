@@ -159,6 +159,85 @@ def adjust_learning_rates(optimizer, is_exploding: bool, config: dict):
         for param_group in optimizer.param_groups:
             param_group['lr'] *= reduction_factor
 
+def check_for_nan_inf(loss: float, metrics: dict, network_name: str) -> bool:
+    """
+    Check for NaN or Inf in loss and gradients.
+
+    Args:
+        loss: Loss value to check
+        metrics: Gradient metrics dictionary
+        network_name: Name of the network for logging
+
+    Returns:
+        True if NaN/Inf detected, False otherwise
+    """
+    import math
+
+    # Check loss
+    if math.isnan(loss) or math.isinf(loss):
+        print(f"⚠️  NaN/Inf detected in {network_name} loss: {loss}")
+        return True
+
+    # Check gradients
+    for key, value in metrics.items():
+        if math.isnan(value) or math.isinf(value):
+            print(f"⚠️  NaN/Inf detected in {network_name} gradient {key}: {value}")
+            return True
+
+    return False
+
+def check_activation_health(network, sample_input: 'torch.Tensor', network_name: str) -> dict:
+    """
+    Check activation statistics to detect saturation or dead neurons.
+
+    Args:
+        network: PyTorch neural network
+        sample_input: Sample input tensor
+        network_name: Name for logging
+
+    Returns:
+        Dictionary of activation statistics
+    """
+    import torch
+
+    activation_stats = {}
+
+    # Hook to capture activations
+    activations = {}
+
+    def get_activation(name):
+        def hook(model, input, output):
+            activations[name] = output.detach()
+        return hook
+
+    # Register hooks
+    hooks = []
+    for name, module in network.named_modules():
+        if isinstance(module, (torch.nn.ReLU, torch.nn.Tanh)):
+            hooks.append(module.register_forward_hook(get_activation(name)))
+
+    # Forward pass
+    with torch.no_grad():
+        _ = network(sample_input)
+
+    # Compute statistics
+    for name, activation in activations.items():
+        flat_act = activation.flatten()
+        activation_stats[f"{network_name}/{name}/mean"] = flat_act.mean().item()
+        activation_stats[f"{network_name}/{name}/std"] = flat_act.std().item()
+        activation_stats[f"{network_name}/{name}/dead_ratio"] = (flat_act == 0).float().mean().item()
+
+        # For tanh, check saturation
+        if 'tanh' in name.lower():
+            saturated = ((flat_act > 0.95) | (flat_act < -0.95)).float().mean().item()
+            activation_stats[f"{network_name}/{name}/saturated_ratio"] = saturated
+
+    # Remove hooks
+    for hook in hooks:
+        hook.remove()
+
+    return activation_stats
+
 def img_rescale(mat, config, min_expected=None, max_expected=None):
     """
     Rescale a matrix to [0, 255] range for visualization.

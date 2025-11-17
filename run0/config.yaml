@@ -1,14 +1,12 @@
 # General parameters
-total_timesteps: 1800000  # n_actions * 400
-maxprocs: [64]
-halo: 0
+total_timesteps: 1800000  # Total training steps
+maxprocs: [64]  # Number of MPI processes for CaNS
 
-# Network architecture
+# Network architecture for CNN-based agents
 net_arch:
-  qf_conv: [32, 64, 32]     # Convolutional layers for spatial processing
-  qf_mlp: [256, 128]        # MLP layers after convolution
-  # qf: [16, 64, 64]        # Uncomment this and remove qf_conv/qf_mlp to use old MLP critic
-  pi: [8]                   # Actor network architecture   
+  actor_channels: [16, 32]  # CNN encoder channels for actor
+  critic_conv: [32, 64, 32]  # Convolutional layers for critic
+  critic_mlp: [256, 128]     # MLP layers after convolution for critic
 
 # Action space parameters
 action:
@@ -18,7 +16,7 @@ action:
 # Grid parameters
 grid:
   target:
-    i: 64
+    i: 64  # Full domain size (reconstructed from 8x8 patches)
     j: 64
 
 # Reward parameters
@@ -29,26 +27,34 @@ reward:
   global_weight: 1.0
   diversity:
     enable: false
-    weight: -0.1          # Negative weight to penalize low diversity
-    min_std_threshold: 0.01  # Minimum action std to avoid penalty
+    weight: -0.1
+    min_std_threshold: 0.01
 
 # Model parameters
 model:
   learning_rate: 0.001
   buffer_size: 5_000_000
-  weight_decay: 0.00001  # Add L2 regularization
+  weight_decay: 0.00001  # L2 regularization
   batch_size: 32
-  tau: 0.01
-  gamma: 0.995
-  train_freq: 300
-  gradient_steps: 64
+  tau: 0.01  # Soft update coefficient
+  gamma: 0.995  # Discount factor
+  train_freq: 300  # Steps between training updates
+  gradient_steps: 64  # Gradient steps per update
+
+  # Smoothness constraints
+  smoothness:
+    lambda_temporal: 0.1   # Temporal smoothness penalty (prevents boom-boom)
+    lambda_spatial: 0.05   # Spatial smoothness penalty (smooth gradients within patches)
+    lambda_zero: 0.01      # Zero-mean penalty per agent (mass conservation)
+
+  # Exploration noise schedule
   action_noise:
-    initial_sigma: 0.1    # Starting noise level - higher for better initial exploration
-    final_sigma: 0.01    # Final noise level - low but non-zero to maintain some exploration
-    decay_episodes: 400   # Number of episodes to decay from initial to final (50% of total episodes)
+    initial_sigma: 0.1     # Starting noise level
+    final_sigma: 0.01      # Final noise level
+    decay_episodes: 400    # Episodes to decay from initial to final
     decay_type: "exponential"  # "linear", "exponential", or "polynomial"
 
-# Field shift parameters
+# Field shift parameters (for data augmentation)
 field_shift:
   enable: true
   dt: 0.0765  # Time step for shifting
@@ -58,16 +64,17 @@ field_shift:
 
 # Training parameters
 training:
-  start_episode_length: 1800  # Fixed episode length in steps - all episodes have exactly this many steps
-  save_freq: 3600
-  gradient_clip: 1.0  # Enable gradient clipping
-  xavier_init_gain: 1.5  # Higher gain for Xavier initialization
+  start_episode_length: 1800  # Episode length in steps
+  save_freq: 3600  # Save checkpoint every N steps
+  gradient_clip: 1.0  # Gradient clipping threshold
+  xavier_init_gain: 1.5  # Xavier initialization gain
+
+  # Gradient monitoring and adaptive control
   gradient_monitoring:
     enable: true
-    log_frequency: 100          # Log gradient metrics every N training steps
-    explosion_threshold: 10.0   # Gradient norm threshold for explosion detection
-    vanishing_threshold: 1e-6   # Minimum gradient norm for vanishing detection
-    adaptive_clipping: true     # Dynamically adjust gradient clipping
-    lr_reduction_factor: 0.8    # Factor to reduce LR when gradients explode
-    track_layer_wise: true      # Track gradients for individual layers
-
+    log_frequency: 100  # Log gradient metrics every N steps
+    explosion_threshold: 10.0  # Gradient norm threshold for explosion
+    vanishing_threshold: 1e-6  # Minimum gradient norm for vanishing
+    adaptive_clipping: true  # Dynamically adjust gradient clipping
+    lr_reduction_factor: 0.8  # Factor to reduce LR when gradients explode
+    track_layer_wise: true  # Track gradients for individual layers
