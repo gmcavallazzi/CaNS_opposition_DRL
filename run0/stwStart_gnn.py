@@ -485,16 +485,18 @@ def train_maddpg(
                         if critic_exploding:
                             maddpg.gradient_clip = min(critic_clip, maddpg.gradient_clip)
 
-                    # Log gradient metrics to TensorBoard
+                    # Log gradient metrics to TensorBoard (Global Norm Only)
                     writer.add_scalar('Gradients/Actor/global_norm', actor_metrics['global_norm'], total_steps)
-                    writer.add_scalar('Gradients/Actor/mean_norm', actor_metrics['mean_norm'], total_steps)
-                    writer.add_scalar('Gradients/Actor/max_norm', actor_metrics['max_norm'], total_steps)
-                    writer.add_scalar('Gradients/Actor/std_norm', actor_metrics['std_norm'], total_steps)
-
                     writer.add_scalar('Gradients/Critic/global_norm', critic_metrics['global_norm'], total_steps)
-                    writer.add_scalar('Gradients/Critic/mean_norm', critic_metrics['mean_norm'], total_steps)
-                    writer.add_scalar('Gradients/Critic/max_norm', critic_metrics['max_norm'], total_steps)
-                    writer.add_scalar('Gradients/Critic/std_norm', critic_metrics['std_norm'], total_steps)
+
+                    # Log GNN-specific metrics if applicable
+                    if hasattr(maddpg.actor, 'gnn_conv'):
+                        if maddpg.actor.gnn_conv.weight.grad is not None:
+                            gnn_grad_norm = maddpg.actor.gnn_conv.weight.grad.norm().item()
+                            writer.add_scalar('Gradients/Actor/gnn_grad_norm', gnn_grad_norm, total_steps)
+                        
+                        gnn_weight_norm = maddpg.actor.gnn_conv.weight.norm().item()
+                        writer.add_scalar('Weights/Actor/gnn_weight_norm', gnn_weight_norm, total_steps)
 
                     # Log health indicators
                     writer.add_scalar('Gradients/Actor/is_exploding', float(actor_exploding), total_steps)
@@ -509,14 +511,9 @@ def train_maddpg(
                     writer.add_scalar('Training/critic_lr', critic_lr, total_steps)
                     writer.add_scalar('Training/gradient_clip', maddpg.gradient_clip, total_steps)
 
-                    # Layer-wise gradient tracking (optional)
-                    if grad_config.get('track_layer_wise', False):
-                        actor_layers = compute_layer_wise_gradients(maddpg.actor, 'actor')
-                        critic_layers = compute_layer_wise_gradients(maddpg.critic, 'critic')
-                        for layer_name, grad_norm in actor_layers.items():
-                            writer.add_scalar(f'Gradients/Layers/{layer_name}', grad_norm, total_steps)
-                        for layer_name, grad_norm in critic_layers.items():
-                            writer.add_scalar(f'Gradients/Layers/{layer_name}', grad_norm, total_steps)
+                    # Layer-wise gradient tracking removed to reduce verbosity
+                    # if grad_config.get('track_layer_wise', False):
+                    #     ...
 
                     # Activation health monitoring (every 500 steps)
                     if total_steps % 500 == 0:
