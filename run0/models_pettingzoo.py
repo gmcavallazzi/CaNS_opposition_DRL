@@ -87,6 +87,130 @@ class CNNActor(nn.Module):
         return actions
 
 
+
+# ============================================================================
+# GNN-based Actor for Cooperative Control
+# ============================================================================
+
+class GridGNNActor(nn.Module):
+    """
+    GNN-based actor that allows communication between neighboring agents.
+    Agents are arranged in an 8x8 grid.
+    """
+    def __init__(self, conv_channels: List[int] = None, dropout_rate: float = 0.05):
+        super().__init__()
+        
+        # Reuse CNNActor components for Encoder/Decoder
+        if conv_channels is None:
+            conv_channels = [16, 32]
+            
+        # 1. Encoder (Same as CNNActor)
+        encoder_layers = []
+        in_channels = 2
+        for out_channels in conv_channels:
+            encoder_layers.extend([
+                nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
+                nn.BatchNorm2d(out_channels),
+                nn.ReLU(),
+                nn.Dropout2d(dropout_rate)
+            ])
+            in_channels = out_channels
+        self.encoder = nn.Sequential(*encoder_layers)
+        
+        # Latent dimension after encoder (32 * 8 * 8 = 2048)
+        self.latent_dim = conv_channels[-1] * 8 * 8
+        
+        # 2. GNN Layer (Communication)
+        # We compress the patch features to a smaller vector for communication
+        self.comm_dim = 64
+        self.compressor = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(self.latent_dim, self.comm_dim),
+            nn.ReLU()
+        )
+        
+        # Message Passing: Convolution over the AGENT grid (8x8 agents)
+        # Kernel 3x3 means we see 8 neighbors + self
+        self.gnn_conv = nn.Conv2d(self.comm_dim, self.comm_dim, kernel_size=3, padding=1)
+        
+        # Decompress back to latent spatial features
+        self.decompressor = nn.Sequential(
+            nn.Linear(self.comm_dim, self.latent_dim),
+            nn.ReLU()
+        )
+        
+        # 3. Decoder (Same as CNNActor)
+        decoder_layers = []
+        in_channels = conv_channels[-1] # 32
+        for i in range(len(conv_channels) - 1, -1, -1):
+            out_channels = conv_channels[i - 1] if i > 0 else 1
+            decoder_layers.extend([
+                nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
+                nn.BatchNorm2d(out_channels) if out_channels > 1 else nn.Identity(),
+                nn.ReLU() if out_channels > 1 else nn.Identity(),
+                nn.Dropout2d(dropout_rate) if out_channels > 1 else nn.Identity()
+            ])
+            in_channels = out_channels
+        self.decoder = nn.Sequential(*decoder_layers)
+        
+        self.apply(self._init_weights)
+        
+    def _init_weights(self, module):
+        if isinstance(module, (nn.Conv2d, nn.Linear)):
+            nn.init.xavier_uniform_(module.weight)
+            if module.bias is not None:
+                nn.init.constant_(module.bias, 0.0)
+
+    def forward(self, obs_batch: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            obs_batch: [Batch, N_Agents, 2, 8, 8]
+        Returns:
+            actions: [Batch, N_Agents, 8, 8]
+        """
+        batch_size, n_agents, c, h, w = obs_batch.shape
+        
+        # 1. Encode each agent independently
+        # Flatten batch and agents: [Batch*N_Agents, 2, 8, 8]
+        obs_flat = obs_batch.view(batch_size * n_agents, c, h, w)
+        features = self.encoder(obs_flat) # [B*N, 32, 8, 8]
+        
+        # 2. Communication (GNN)
+        # Compress: [B*N, 2048] -> [B*N, 64]
+        comm_vec = self.compressor(features)
+        
+        # Reshape to Agent Grid: [Batch, 64, 8, 8] (assuming 8x8 agents)
+        # Note: We assume n_agents = 64 and grid is 8x8. 
+        # If dynamic, we need to pass grid dims. For now hardcode 8x8.
+        agent_grid_h, agent_grid_w = 8, 8
+        comm_grid = comm_vec.view(batch_size, agent_grid_h, agent_grid_w, self.comm_dim)
+        comm_grid = comm_grid.permute(0, 3, 1, 2) # [Batch, CommDim, 8, 8]
+        
+        # Message Passing (Conv over agents)
+        comm_updated = self.gnn_conv(comm_grid) # [Batch, CommDim, 8, 8]
+        
+        # Flatten back to list of agents
+        comm_updated = comm_updated.permute(0, 2, 3, 1).contiguous()
+        comm_flat = comm_updated.view(batch_size * n_agents, self.comm_dim)
+        
+        # Decompress + Residual Connection
+        latent_updated = self.decompressor(comm_flat) # [B*N, 2048]
+        latent_spatial = latent_updated.view(batch_size * n_agents, -1, 8, 8)
+        
+        # Skip connection from original features? 
+        # Let's add them to preserve local info
+        features_combined = features + latent_spatial
+        
+        # 3. Decode
+        actions = self.decoder(features_combined) # [B*N, 1, 8, 8]
+        actions = torch.tanh(actions.squeeze(1)) # [B*N, 8, 8]
+        
+        # Reshape back to [Batch, N_Agents, 8, 8]
+        actions = actions.view(batch_size, n_agents, 8, 8)
+        
+        return actions
+
+
 # ============================================================================
 # CNN-based Critic for Global State Evaluation
 # ============================================================================
@@ -270,7 +394,8 @@ class SharedPolicyMADDPG:
         gradient_clip: float = 1.0,
         lambda_temporal: float = 0.1,
         lambda_spatial: float = 0.05,
-        lambda_zero: float = 0.01
+        lambda_zero: float = 0.01,
+        use_gnn: bool = False
     ):
         self.agents = agents
         self.n_agents = len(agents)
@@ -279,6 +404,7 @@ class SharedPolicyMADDPG:
         self.tau = tau
         self.weight_decay = weight_decay
         self.gradient_clip = gradient_clip
+        self.use_gnn = use_gnn
 
         # Smoothness penalty weights
         self.lambda_temporal = lambda_temporal
@@ -293,16 +419,20 @@ class SharedPolicyMADDPG:
         if critic_mlp_layers is None:
             critic_mlp_layers = [256, 128]
 
-        print(f"Initializing CNN-based MADDPG:")
+        print(f"Initializing {'GNN' if use_gnn else 'CNN'}-based MADDPG:")
         print(f"  Number of agents: {self.n_agents}")
-        print(f"  Actor CNN channels: {actor_channels}")
+        print(f"  Actor channels: {actor_channels}")
         print(f"  Critic conv channels: {critic_conv_channels}")
         print(f"  Critic MLP layers: {critic_mlp_layers}")
         print(f"  Smoothness penalties - temporal: {lambda_temporal}, spatial: {lambda_spatial}, zero-mean: {lambda_zero}")
 
         # Create networks
-        self.actor = CNNActor(actor_channels, dropout_rate).to(device)
-        self.actor_target = CNNActor(actor_channels, dropout_rate).to(device)
+        if self.use_gnn:
+            self.actor = GridGNNActor(actor_channels, dropout_rate).to(device)
+            self.actor_target = GridGNNActor(actor_channels, dropout_rate).to(device)
+        else:
+            self.actor = CNNActor(actor_channels, dropout_rate).to(device)
+            self.actor_target = CNNActor(actor_channels, dropout_rate).to(device)
 
         self.critic = CNNCritic(critic_conv_channels, critic_mlp_layers, dropout_rate).to(device)
         self.critic_target = CNNCritic(critic_conv_channels, critic_mlp_layers, dropout_rate).to(device)
@@ -326,7 +456,16 @@ class SharedPolicyMADDPG:
             all_actions: [n_agents, 8, 8] - actions for all agents
         """
         with torch.no_grad():
-            all_actions = self.actor(all_obs).cpu().numpy()
+            if self.use_gnn:
+                # GNN expects [Batch, N_Agents, 2, 8, 8]
+                # all_obs is [N_Agents, 2, 8, 8] -> Unsqueeze batch dim
+                obs_batch = all_obs.unsqueeze(0) # [1, 64, 2, 8, 8]
+                actions_batch = self.actor(obs_batch) # [1, 64, 8, 8]
+                all_actions = actions_batch.squeeze(0).cpu().numpy()
+            else:
+                # CNN expects [Batch*N_Agents, 2, 8, 8]
+                # all_obs is [N_Agents, 2, 8, 8] which works as a batch of 64
+                all_actions = self.actor(all_obs).cpu().numpy()
         return all_actions
 
     def update_batched(self, batch: Dict[str, torch.Tensor]) -> Tuple[float, float, Dict[str, float]]:
@@ -354,8 +493,11 @@ class SharedPolicyMADDPG:
             next_obs_flat = next_obs_batch.view(batch_size * self.n_agents, 2, 8, 8)
 
             # Get next actions from target actor
-            next_actions_flat = self.actor_target(next_obs_flat)  # [batch*n_agents, 8, 8]
-            next_actions = next_actions_flat.view(batch_size, self.n_agents, 8, 8)
+            if self.use_gnn:
+                next_actions = self.actor_target(next_obs_batch) # [Batch, N_Agents, 8, 8]
+            else:
+                next_actions_flat = self.actor_target(next_obs_flat)  # [batch*n_agents, 8, 8]
+                next_actions = next_actions_flat.view(batch_size, self.n_agents, 8, 8)
 
             # Prepare spatial data for critic
             next_obs_fields, next_act_field = self._prepare_spatial_data(
@@ -393,8 +535,11 @@ class SharedPolicyMADDPG:
         obs_flat = obs_batch.view(batch_size * self.n_agents, 2, 8, 8)
 
         # Get actions from current policy
-        actions_flat = self.actor(obs_flat)  # [batch*n_agents, 8, 8]
-        actions = actions_flat.view(batch_size, self.n_agents, 8, 8)
+        if self.use_gnn:
+            actions = self.actor(obs_batch) # [Batch, N_Agents, 8, 8]
+        else:
+            actions_flat = self.actor(obs_flat)  # [batch*n_agents, 8, 8]
+            actions = actions_flat.view(batch_size, self.n_agents, 8, 8)
 
         # Prepare spatial data for critic
         obs_fields_new, act_field_new = self._prepare_spatial_data(obs_batch, actions)
