@@ -108,6 +108,7 @@ mpirun \
   -x UCX_MAX_RNDV_RAILS \
   -x UCX_MEMTYPE_CACHE \
   -x PYTHONPATH \
+  python stwStart_gnn.py
   python stwStart_pettingzoo.py 
   #python evaluate_custom_grid.py ./checkpoints_pettingzoo_grid_shared/best_model.pt --grid_i 192 --grid_j 192 --episodes 5 --no_save
   #python stw_utils_pettingzoo.py evaluate --config config.yaml --num_episodes 5 --policy_path ./checkpoints_pettingzoo_grid_shared/best_model.pt
