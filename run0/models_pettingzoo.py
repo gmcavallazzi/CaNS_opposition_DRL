@@ -237,7 +237,7 @@ class CNNCritic(nn.Module):
         for out_channels in conv_channels:
             conv_layers.extend([
                 nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
-                nn.BatchNorm2d(out_channels),
+                nn.GroupNorm(4, out_channels),  # GroupNorm is more stable than BatchNorm for RL
                 nn.ReLU(),
                 nn.MaxPool2d(2, 2),  # Reduce spatial dimensions
                 nn.Dropout2d(dropout_rate)
@@ -283,7 +283,7 @@ class CNNCritic(nn.Module):
                 nn.init.xavier_uniform_(module.weight, gain=1.0)
                 if module.bias is not None:
                     nn.init.constant_(module.bias, 0.0)
-        elif isinstance(module, (nn.LayerNorm, nn.BatchNorm2d)):
+        elif isinstance(module, (nn.LayerNorm, nn.GroupNorm, nn.BatchNorm2d)):
             nn.init.constant_(module.weight, 1.0)
             nn.init.constant_(module.bias, 0.0)
 
@@ -385,6 +385,7 @@ class SharedPolicyMADDPG:
         gamma: float = 0.995,
         tau: float = 0.01,
         lr: float = 1e-3,
+        critic_lr: float = 3e-4,  # Lower default LR for critic stability
         dropout_rate: float = 0.05,
         weight_decay: float = 1e-5,
         device: str = "cpu",
@@ -405,6 +406,10 @@ class SharedPolicyMADDPG:
         self.weight_decay = weight_decay
         self.gradient_clip = gradient_clip
         self.use_gnn = use_gnn
+        
+        # Learning rates
+        self.actor_lr = lr
+        self.critic_lr = critic_lr
 
         # Smoothness penalty weights
         self.lambda_temporal = lambda_temporal
@@ -442,8 +447,8 @@ class SharedPolicyMADDPG:
         self.critic_target.load_state_dict(self.critic.state_dict())
 
         # Setup optimizers
-        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=lr, weight_decay=weight_decay)
-        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=lr, weight_decay=weight_decay)
+        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=self.actor_lr, weight_decay=weight_decay)
+        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=self.critic_lr, weight_decay=weight_decay)
 
     def select_actions_batched(self, all_obs: torch.Tensor) -> np.ndarray:
         """

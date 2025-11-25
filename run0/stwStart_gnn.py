@@ -259,12 +259,13 @@ def train_maddpg(
         gamma=config['model']['gamma'],
         tau=config['model']['tau'],
         lr=config['model']['learning_rate'],
+        critic_lr=config['model'].get('critic_learning_rate', 3e-4),  # Use lower LR for critic
         weight_decay=config['model']['weight_decay'],
         device=device,
         actor_channels=config.get('net_arch', {}).get('actor_channels', [16, 32]),
         critic_conv_channels=config.get('net_arch', {}).get('critic_conv', [32, 64, 32]),
         critic_mlp_layers=config.get('net_arch', {}).get('critic_mlp', [256, 128]),
-        gradient_clip=config['training']['gradient_clip'],
+        gradient_clip=config['training'].get('gradient_clip', 1.0),  # Default to 1.0 if not set
         lambda_temporal=config['model']['smoothness'].get('lambda_temporal', 0.1),
         lambda_spatial=config['model']['smoothness'].get('lambda_spatial', 0.05),
         lambda_zero=config['model']['smoothness'].get('lambda_zero', 0.01),

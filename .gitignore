@@ -42,3 +42,4 @@ LICENSE
 
 # exclude minimal model inspector
 inspect_model_minimal.py
+*csv
