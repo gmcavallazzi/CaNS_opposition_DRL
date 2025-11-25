@@ -33,7 +33,8 @@ RUN_DIR := $(ROOT_DIR)/run0
 EXE_DIR := $(BUILD_DIR)
 CONFIG_DIR := $(ROOT_DIR)/configs
 LIBS_DIR := $(ROOT_DIR)/dependencies
-LIBS := -L/users/addh496/sharedscratch/dev/mpi/fftw-3.3.10/lib/ -lfftw3
+#LIBS := -L/users/addh496/sharedscratch/dev/mpi/fftw-3.3.10/lib/ -lfftw3
+LIBS := -L/opt/homebrew/Cellar/fftw/3.3.10_1/lib/ -lfftw3
 INCS :=
 
 DEFINES :=

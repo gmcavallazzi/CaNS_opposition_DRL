@@ -518,7 +518,13 @@ def train_maddpg(
                     # Activation health monitoring (every 500 steps)
                     if total_steps % 500 == 0:
                         # Check actor activations
-                        sample_obs = all_obs_tensor[:8]  # Sample of 8 agents
+                        if maddpg.use_gnn:
+                            # GNN expects [Batch, N_Agents, C, H, W]
+                            # We treat the set of all agents as a single batch item
+                            sample_obs = all_obs_tensor.unsqueeze(0)  # [1, 64, 2, 8, 8]
+                        else:
+                            # CNN expects [Batch, C, H, W]
+                            sample_obs = all_obs_tensor[:8]  # Sample of 8 agents
                         actor_act_stats = check_activation_health(maddpg.actor, sample_obs, 'actor')
                         for stat_name, stat_value in actor_act_stats.items():
                             writer.add_scalar(f'Activations/{stat_name}', stat_value, total_steps)

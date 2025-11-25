@@ -32,6 +32,9 @@ run0_*/
 run_*/
 runPPO/
 
+run0/cans
+run0/launch.sh
+
 # specific files
 ACKNOWLEDGEMENTS
 CONTRIBUTORS
