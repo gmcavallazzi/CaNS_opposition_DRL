@@ -33,6 +33,7 @@ reward:
 # Model parameters
 model:
   learning_rate: 0.001
+  critic_learning_rate: 0.0003  # Lower LR for critic stability
   buffer_size: 5_000_000
   weight_decay: 0.00001  # L2 regularization
   batch_size: 32
@@ -43,9 +44,9 @@ model:
 
   # Smoothness constraints
   smoothness:
-    lambda_temporal: 0.1   # Temporal smoothness penalty (prevents boom-boom)
-    lambda_spatial: 0.05   # Spatial smoothness penalty (smooth gradients within patches)
-    lambda_zero: 0.01      # Zero-mean penalty per agent (mass conservation)
+    lambda_temporal: 1.0   # Temporal smoothness penalty (prevents boom-boom)
+    lambda_spatial: 0.5    # Spatial smoothness penalty (smooth gradients within patches)
+    lambda_zero: 0.1       # Zero-mean penalty per agent (mass conservation)
 
   # Exploration noise schedule
   action_noise:
