@@ -77,5 +77,5 @@ training:
     explosion_threshold: 50.0  # Gradient norm threshold for explosion
     vanishing_threshold: 1e-6  # Minimum gradient norm for vanishing
     adaptive_clipping: true  # Dynamically adjust gradient clipping
-    lr_reduction_factor: 0.8  # Factor to reduce LR when gradients explode
+    lr_reduction_factor: 0.95  # Factor to reduce LR when gradients explode
     track_layer_wise: true  # Track gradients for individual layers
