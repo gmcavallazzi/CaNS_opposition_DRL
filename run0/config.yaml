@@ -24,7 +24,7 @@ reward:
   dpdx:
     min: -0.0045
     max: -0.0018
-  global_weight: 1.0
+  global_weight: 20.0
   diversity:
     enable: false
     weight: -0.1
@@ -74,7 +74,7 @@ training:
   gradient_monitoring:
     enable: true
     log_frequency: 100  # Log gradient metrics every N steps
-    explosion_threshold: 10.0  # Gradient norm threshold for explosion
+    explosion_threshold: 50.0  # Gradient norm threshold for explosion
     vanishing_threshold: 1e-6  # Minimum gradient norm for vanishing
     adaptive_clipping: true  # Dynamically adjust gradient clipping
     lr_reduction_factor: 0.8  # Factor to reduce LR when gradients explode
