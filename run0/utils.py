@@ -9,11 +9,14 @@ def load_config(config_path):
     return config
 
 def compute_reward(dpdx, config):
-    # Reference uncontrolled dpdx value (most negative)
-    dpdx_uncontrolled = config['reward']['dpdx']['min']
+    # Reference uncontrolled dpdx value (natural flow without control)
+    dpdx_uncontrolled = config['reward']['dpdx']['uncontrolled']
 
-    # Calculate percentage reduction
+    # Calculate percentage reduction from uncontrolled baseline
     # As dpdx gets less negative (closer to zero), this value increases
+    # When dpdx = dpdx_uncontrolled (no improvement): reduction = 0
+    # When dpdx > dpdx_uncontrolled (worse): reduction < 0
+    # When dpdx < dpdx_uncontrolled (better): reduction > 0
     reduction = 1.0 - (dpdx / dpdx_uncontrolled)
 
     return reduction

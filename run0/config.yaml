@@ -22,9 +22,10 @@ grid:
 # Reward parameters
 reward:
   dpdx:
-    min: -0.0045
-    max: -0.0018
-  global_weight: 20.0
+    uncontrolled: -0.0042  # Natural flow without control (baseline)
+    target: -0.002         # Target for good control performance
+    max: -0.0018          # Excellent control (kept for reference)
+  global_weight: 10.0       # Increased to amplify drag reduction signal
   diversity:
     enable: false
     weight: -0.1
@@ -32,27 +33,28 @@ reward:
 
 # Model parameters
 model:
-  learning_rate: 0.001
-  critic_learning_rate: 0.0003  # Lower LR for critic stability
+  learning_rate: 0.00025        # Actor learning rate (reduced from 0.001 for stability)
+  critic_learning_rate: 0.00008  # Critic learning rate (reduced from 0.0003 for stability)
   buffer_size: 5_000_000
   weight_decay: 0.00001  # L2 regularization
   batch_size: 32
-  tau: 0.01  # Soft update coefficient
+  tau: 0.005  # Soft update coefficient (reduced from 0.01 for slower target updates)
   gamma: 0.995  # Discount factor
   train_freq: 300  # Steps between training updates
   gradient_steps: 64  # Gradient steps per update
+  learning_starts: 5400  # Warmup: collect 3 episodes of data before training starts
 
-  # Smoothness constraints
+  # Smoothness constraints (increased to balance with Q-value gradients)
   smoothness:
-    lambda_temporal: 1.0   # Temporal smoothness penalty (prevents boom-boom)
-    lambda_spatial: 0.5    # Spatial smoothness penalty (smooth gradients within patches)
-    lambda_zero: 0.1       # Zero-mean penalty per agent (mass conservation)
+    lambda_temporal: 0.5  # Reduced from 10.0 to allow faster adaptation
+    lambda_spatial: 0.5    # Reduced from 5.0 to allow sharper gradients
+    lambda_zero: 0.1       # Reduced from 1.0 to relax mass conservation constraint
 
   # Exploration noise schedule
   action_noise:
     initial_sigma: 0.1     # Starting noise level
     final_sigma: 0.01      # Final noise level
-    decay_episodes: 400    # Episodes to decay from initial to final
+    decay_episodes: 200    # Episodes to decay from initial to final
     decay_type: "exponential"  # "linear", "exponential", or "polynomial"
 
 # Field shift parameters (for data augmentation)
@@ -67,7 +69,7 @@ field_shift:
 training:
   start_episode_length: 1800  # Episode length in steps
   save_freq: 3600  # Save checkpoint every N steps
-  gradient_clip: 1.0  # Gradient clipping threshold
+  gradient_clip: 0.5  # Gradient clipping threshold (reduced from 1.0 for stability)
   xavier_init_gain: 1.5  # Xavier initialization gain
 
   # Gradient monitoring and adaptive control

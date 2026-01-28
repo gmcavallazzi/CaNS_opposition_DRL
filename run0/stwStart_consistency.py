@@ -1,3 +1,13 @@
+"""
+Training script for MADDPG with Observation-Similarity Consistency Loss.
+
+This script trains multi-agent DRL for turbulent flow control with:
+- Observation-similarity consistency loss for smooth patch transitions
+- Actor with standard padding (patches are not periodic)
+- Critic with circular padding (full domain is periodic)
+- Temporal smoothness disabled by default (causes confusion with old policy)
+"""
+
 import os
 import sys
 import torch
@@ -23,8 +33,8 @@ from utils import (
     check_for_nan_inf,
     check_activation_health
 )
-from models_pettingzoo import (
-    SharedPolicyMADDPG,
+from models_consistency import (
+    SharedPolicyMADDPGConsistency,
     BatchedReplayBuffer
 )
 import time
@@ -84,9 +94,9 @@ def create_field_visualization(u_field: np.ndarray, w_field: np.ndarray,
     fig, axes = plt.subplots(1, 3, figsize=(16, 5))
 
     # Compute statistics
-    u_stats = f"μ={np.mean(u_field):.4f}, σ={np.std(u_field):.4f}"
-    w_stats = f"μ={np.mean(w_field):.4f}, σ={np.std(w_field):.4f}"
-    action_stats = f"μ={np.mean(action_field):.4f}, σ={np.std(action_field):.4f}"
+    u_stats = f"mu={np.mean(u_field):.4f}, sigma={np.std(u_field):.4f}"
+    w_stats = f"mu={np.mean(w_field):.4f}, sigma={np.std(w_field):.4f}"
+    action_stats = f"mu={np.mean(action_field):.4f}, sigma={np.std(action_field):.4f}"
 
     # U-velocity field
     im0 = axes[0].imshow(u_field, cmap='RdBu_r', aspect='auto', origin='lower')
@@ -165,8 +175,8 @@ def create_action_change_visualization(action_t: np.ndarray, action_t_prev: np.n
 
     im2 = axes[2].imshow(action_change, cmap='RdBu_r', aspect='auto',
                         origin='lower', vmin=-max_change, vmax=max_change)
-    change_stats = f"μ={np.mean(action_change):.4f}, σ={np.std(action_change):.4f}\nmax|Δ|={np.max(np.abs(action_change)):.4f}"
-    axes[2].set_title(f'Δ Actions (boom-boom indicator)\n{change_stats}', fontsize=10)
+    change_stats = f"mu={np.mean(action_change):.4f}, sigma={np.std(action_change):.4f}\nmax|Delta|={np.max(np.abs(action_change)):.4f}"
+    axes[2].set_title(f'Delta Actions (boom-boom indicator)\n{change_stats}', fontsize=10)
     axes[2].set_xlabel('j (spanwise)', fontsize=9)
     axes[2].set_ylabel('i (streamwise)', fontsize=9)
     cbar = plt.colorbar(im2, ax=axes[2], fraction=0.046, pad=0.04)
@@ -189,16 +199,16 @@ def create_action_change_visualization(action_t: np.ndarray, action_t_prev: np.n
 
     return image
 
-def train_maddpg(
+def train_maddpg_consistency(
     config: Dict[str, Any],
-    checkpoint_dir: str = "./checkpoints_pettingzoo",
-    logs_dir: str = "./logs_pettingzoo",
+    checkpoint_dir: str = "./checkpoints_consistency",
+    logs_dir: str = "./logs_consistency",
     device: Optional[str] = None,
     resume_checkpoint: Optional[str] = None,
     resume_buffer: Optional[str] = None,
 ):
     """
-    Train MADDPG agents with CNN policies for patch-based flow control.
+    Train MADDPG agents with consistency loss for patch-based flow control.
 
     Args:
         config: Configuration dictionary
@@ -238,6 +248,18 @@ def train_maddpg(
     save_freq = config['training']['save_freq']
     buffer_size = config['model']['buffer_size']
 
+    # Extract consistency parameters
+    consistency_config = config['model']['smoothness'].get('consistency', {})
+    consistency_enable = consistency_config.get('enable', True)
+    consistency_lambda = consistency_config.get('lambda', 0.1)
+    consistency_tau = consistency_config.get('tau_similarity', 0.9)
+    consistency_margin = consistency_config.get('margin', 0.1)
+    consistency_boundary_only = consistency_config.get('boundary_only', True)
+    consistency_warmup_steps = consistency_config.get('warmup_steps', 5000)
+
+    # Extract similarity dimension
+    similarity_dim = config.get('net_arch', {}).get('similarity_dim', 16)
+
     # Memory estimation
     obs_size = np.prod(obs_shape)  # 2 * 8 * 8 = 128
     act_size = np.prod(act_shape)  # 8 * 8 = 64
@@ -250,27 +272,34 @@ def train_maddpg(
     print(f"- Estimated replay buffer memory: {estimated_memory_gb:.2f} GB")
 
     if estimated_memory_gb > 50:
-        print(f"\n⚠️  WARNING: High memory usage detected!")
+        print(f"\n  WARNING: High memory usage detected!")
         print(f"   Estimated memory: {estimated_memory_gb:.1f} GB")
         print(f"   Consider reducing buffer_size in config.yaml")
 
-    # Create shared policy MADDPG trainer with smoothness constraints
-    maddpg = SharedPolicyMADDPG(
+    # Create shared policy MADDPG trainer with consistency loss
+    maddpg = SharedPolicyMADDPGConsistency(
         agents=agents,
         gamma=config['model']['gamma'],
         tau=config['model']['tau'],
         lr=config['model']['learning_rate'],
-        critic_lr=config['model'].get('critic_learning_rate', 3e-4),  # Use lower LR for critic
+        critic_lr=config['model']['critic_learning_rate'],
         weight_decay=config['model']['weight_decay'],
         device=device,
         actor_channels=config.get('net_arch', {}).get('actor_channels', [16, 32]),
         critic_conv_channels=config.get('net_arch', {}).get('critic_conv', [32, 64, 32]),
         critic_mlp_layers=config.get('net_arch', {}).get('critic_mlp', [256, 128]),
-        gradient_clip=config['training'].get('gradient_clip', 1.0),  # Default to 1.0 if not set
-        lambda_temporal=config['model']['smoothness'].get('lambda_temporal', 0.1),
-        lambda_spatial=config['model']['smoothness'].get('lambda_spatial', 0.05),
-        lambda_zero=config['model']['smoothness'].get('lambda_zero', 0.01),
-        use_gnn=True
+        gradient_clip=config['training']['gradient_clip'],
+        lambda_temporal=config['model']['smoothness'].get('lambda_temporal', 0.0),
+        lambda_spatial=config['model']['smoothness'].get('lambda_spatial', 0.5),
+        lambda_zero=config['model']['smoothness'].get('lambda_zero', 0.1),
+        # Consistency loss parameters
+        consistency_enable=consistency_enable,
+        consistency_lambda=consistency_lambda,
+        consistency_tau=consistency_tau,
+        consistency_margin=consistency_margin,
+        consistency_boundary_only=consistency_boundary_only,
+        consistency_warmup_steps=consistency_warmup_steps,
+        similarity_dim=similarity_dim
     )
 
     # Initialize replay buffer with previous action tracking
@@ -295,7 +324,7 @@ def train_maddpg(
 
     # Setup tensorboard writer
     current_time = datetime.now().strftime('%Y%m%d_%H%M%S')
-    run_name = f"maddpg_cnn_agents{num_agents}_{current_time}"
+    run_name = f"maddpg_consistency_agents{num_agents}_{current_time}"
     writer = SummaryWriter(f"{logs_dir}/{run_name}")
 
     # Save config
@@ -315,6 +344,7 @@ def train_maddpg(
     episode_temporal_losses = []
     episode_spatial_losses = []
     episode_zero_losses = []
+    episode_consistency_losses = []  # NEW: track consistency loss
     episode_actions = []
 
     # Action statistics tracking
@@ -331,7 +361,11 @@ def train_maddpg(
     # Track action matrix for visualization
     prev_action_matrix = np.zeros((64, 64), dtype=np.float32)
 
-    print("Starting training...")
+    print("Starting training with consistency loss...")
+    print(f"  Consistency enabled: {consistency_enable}")
+    print(f"  Consistency lambda: {consistency_lambda}")
+    print(f"  Consistency warmup steps: {consistency_warmup_steps}")
+
     try:
         while total_steps < max_steps:
             # Select actions for all agents using batched processing
@@ -407,6 +441,7 @@ def train_maddpg(
                 batch_temporal_losses = []
                 batch_spatial_losses = []
                 batch_zero_losses = []
+                batch_consistency_losses = []  # NEW
                 batch_q_values = []
 
                 for _ in range(gradient_steps):
@@ -420,7 +455,7 @@ def train_maddpg(
                     # Check critic
                     critic_metrics = compute_gradient_metrics(maddpg.critic)
                     if check_for_nan_inf(critic_loss, critic_metrics, "Critic"):
-                        print("❌ Training failed: NaN/Inf detected in critic!")
+                        print("Training failed: NaN/Inf detected in critic!")
                         print(f"   Critic loss: {critic_loss}")
                         print(f"   Last 5 critic losses: {batch_critic_losses[-5:]}")
                         raise ValueError("NaN/Inf detected in critic - training terminated")
@@ -428,7 +463,7 @@ def train_maddpg(
                     # Check actor
                     actor_metrics = compute_gradient_metrics(maddpg.actor)
                     if check_for_nan_inf(actor_loss, actor_metrics, "Actor"):
-                        print("❌ Training failed: NaN/Inf detected in actor!")
+                        print("Training failed: NaN/Inf detected in actor!")
                         print(f"   Actor loss: {actor_loss}")
                         print(f"   Loss breakdown: {loss_breakdown}")
                         raise ValueError("NaN/Inf detected in actor - training terminated")
@@ -437,14 +472,15 @@ def train_maddpg(
                     q_loss_abs = abs(loss_breakdown['q_loss'])
                     total_smoothness = (loss_breakdown['temporal_loss'] +
                                        loss_breakdown['spatial_loss'] +
-                                       loss_breakdown['zero_loss'])
+                                       loss_breakdown['zero_loss'] +
+                                       loss_breakdown['consistency_loss'])
 
                     if q_loss_abs > 0 and total_smoothness / q_loss_abs > 10.0:
-                        print(f"⚠️  Warning: Smoothness losses dominating!")
+                        print(f"Warning: Smoothness+consistency losses dominating!")
                         print(f"   Q-loss: {q_loss_abs:.6f}")
-                        print(f"   Smoothness total: {total_smoothness:.6f}")
+                        print(f"   Smoothness+consistency total: {total_smoothness:.6f}")
                         print(f"   Ratio: {total_smoothness / q_loss_abs:.2f}x")
-                        print(f"   Consider reducing lambda_temporal/spatial/zero")
+                        print(f"   Consider reducing lambda values")
 
                     # Record losses for episode tracking
                     batch_critic_losses.append(critic_loss)
@@ -452,6 +488,7 @@ def train_maddpg(
                     batch_temporal_losses.append(loss_breakdown['temporal_loss'])
                     batch_spatial_losses.append(loss_breakdown['spatial_loss'])
                     batch_zero_losses.append(loss_breakdown['zero_loss'])
+                    batch_consistency_losses.append(loss_breakdown['consistency_loss'])  # NEW
 
                     # Extract Q-values for tracking
                     with torch.no_grad():
@@ -487,18 +524,16 @@ def train_maddpg(
                         if critic_exploding:
                             maddpg.gradient_clip = min(critic_clip, maddpg.gradient_clip)
 
-                    # Log gradient metrics to TensorBoard (Global Norm Only)
+                    # Log gradient metrics to TensorBoard
                     writer.add_scalar('Gradients/Actor/global_norm', actor_metrics['global_norm'], total_steps)
-                    writer.add_scalar('Gradients/Critic/global_norm', critic_metrics['global_norm'], total_steps)
+                    writer.add_scalar('Gradients/Actor/mean_norm', actor_metrics['mean_norm'], total_steps)
+                    writer.add_scalar('Gradients/Actor/max_norm', actor_metrics['max_norm'], total_steps)
+                    writer.add_scalar('Gradients/Actor/std_norm', actor_metrics['std_norm'], total_steps)
 
-                    # Log GNN-specific metrics if applicable
-                    if hasattr(maddpg.actor, 'gnn_conv'):
-                        if maddpg.actor.gnn_conv.weight.grad is not None:
-                            gnn_grad_norm = maddpg.actor.gnn_conv.weight.grad.norm().item()
-                            writer.add_scalar('Gradients/Actor/gnn_grad_norm', gnn_grad_norm, total_steps)
-                        
-                        gnn_weight_norm = maddpg.actor.gnn_conv.weight.norm().item()
-                        writer.add_scalar('Weights/Actor/gnn_weight_norm', gnn_weight_norm, total_steps)
+                    writer.add_scalar('Gradients/Critic/global_norm', critic_metrics['global_norm'], total_steps)
+                    writer.add_scalar('Gradients/Critic/mean_norm', critic_metrics['mean_norm'], total_steps)
+                    writer.add_scalar('Gradients/Critic/max_norm', critic_metrics['max_norm'], total_steps)
+                    writer.add_scalar('Gradients/Critic/std_norm', critic_metrics['std_norm'], total_steps)
 
                     # Log health indicators
                     writer.add_scalar('Gradients/Actor/is_exploding', float(actor_exploding), total_steps)
@@ -513,20 +548,19 @@ def train_maddpg(
                     writer.add_scalar('Training/critic_lr', critic_lr, total_steps)
                     writer.add_scalar('Training/gradient_clip', maddpg.gradient_clip, total_steps)
 
-                    # Layer-wise gradient tracking removed to reduce verbosity
-                    # if grad_config.get('track_layer_wise', False):
-                    #     ...
+                    # Layer-wise gradient tracking (optional)
+                    if grad_config.get('track_layer_wise', False):
+                        actor_layers = compute_layer_wise_gradients(maddpg.actor, 'actor')
+                        critic_layers = compute_layer_wise_gradients(maddpg.critic, 'critic')
+                        for layer_name, grad_norm in actor_layers.items():
+                            writer.add_scalar(f'Gradients/Layers/{layer_name}', grad_norm, total_steps)
+                        for layer_name, grad_norm in critic_layers.items():
+                            writer.add_scalar(f'Gradients/Layers/{layer_name}', grad_norm, total_steps)
 
                     # Activation health monitoring (every 500 steps)
                     if total_steps % 500 == 0:
                         # Check actor activations
-                        if maddpg.use_gnn:
-                            # GNN expects [Batch, N_Agents, C, H, W]
-                            # We treat the set of all agents as a single batch item
-                            sample_obs = all_obs_tensor.unsqueeze(0)  # [1, 64, 2, 8, 8]
-                        else:
-                            # CNN expects [Batch, C, H, W]
-                            sample_obs = all_obs_tensor[:8]  # Sample of 8 agents
+                        sample_obs = all_obs_tensor[:8]  # Sample of 8 agents
                         actor_act_stats = check_activation_health(maddpg.actor, sample_obs, 'actor')
                         for stat_name, stat_value in actor_act_stats.items():
                             writer.add_scalar(f'Activations/{stat_name}', stat_value, total_steps)
@@ -534,12 +568,12 @@ def train_maddpg(
                         # Warn if too many dead neurons
                         dead_ratios = [v for k, v in actor_act_stats.items() if 'dead_ratio' in k]
                         if dead_ratios and max(dead_ratios) > 0.5:
-                            print(f"⚠️  Warning: {max(dead_ratios)*100:.1f}% dead neurons detected in actor!")
+                            print(f"Warning: {max(dead_ratios)*100:.1f}% dead neurons detected in actor!")
 
                         # Warn if tanh saturated
                         saturated_ratios = [v for k, v in actor_act_stats.items() if 'saturated_ratio' in k]
                         if saturated_ratios and max(saturated_ratios) > 0.8:
-                            print(f"⚠️  Warning: {max(saturated_ratios)*100:.1f}% saturated tanh activations in actor!")
+                            print(f"Warning: {max(saturated_ratios)*100:.1f}% saturated tanh activations in actor!")
 
                 # Add values to episode tracking lists
                 episode_critic_losses.extend(batch_critic_losses)
@@ -547,6 +581,7 @@ def train_maddpg(
                 episode_temporal_losses.extend(batch_temporal_losses)
                 episode_spatial_losses.extend(batch_spatial_losses)
                 episode_zero_losses.extend(batch_zero_losses)
+                episode_consistency_losses.extend(batch_consistency_losses)  # NEW
                 episode_q_values.extend(batch_q_values)
 
             # Check if episode is done
@@ -586,6 +621,12 @@ def train_maddpg(
                 if episode_zero_losses:
                     writer.add_scalar('Episode/zero_loss', np.mean(episode_zero_losses), episode)
 
+                # NEW: Log consistency loss
+                if episode_consistency_losses:
+                    avg_consistency_loss = np.mean(episode_consistency_losses)
+                    writer.add_scalar('Episode/consistency_loss', avg_consistency_loss, episode)
+                    writer.add_scalar('Loss/consistency', avg_consistency_loss, episode)
+
                 if episode_q_values:
                     avg_q_val = np.mean(episode_q_values)
                     writer.add_scalar('Episode/q_value', avg_q_val, episode)
@@ -598,6 +639,11 @@ def train_maddpg(
                 # Log current noise scale for exploration tracking
                 current_noise_scale = compute_noise_scale(episode, config)
                 writer.add_scalar('Episode/noise_scale', current_noise_scale, episode)
+
+                # Log training step for consistency warmup tracking
+                writer.add_scalar('Training/training_step', maddpg.training_step, episode)
+                writer.add_scalar('Training/consistency_active',
+                                 float(maddpg.training_step >= consistency_warmup_steps), episode)
 
                 # Generate detailed histograms (every 5 episodes)
                 if episode % 5 == 0:
@@ -640,10 +686,10 @@ def train_maddpg(
                         # Update previous action matrix for next visualization
                         prev_action_matrix = action_matrix.copy()
 
-                        print(f"  └─ Field visualizations logged for episode {episode}")
+                        print(f"  Field visualizations logged for episode {episode}")
 
                     except Exception as e:
-                        print(f"⚠️  Warning: Could not create field visualization: {e}")
+                        print(f"Warning: Could not create field visualization: {e}")
 
                 # Check for best reward and save checkpoint
                 if avg_reward > best_reward:
@@ -663,6 +709,7 @@ def train_maddpg(
                 episode_temporal_losses = []
                 episode_spatial_losses = []
                 episode_zero_losses = []
+                episode_consistency_losses = []  # NEW
                 episode_actions = []
                 episode_reward_history = []
                 episode_action_mean_history = []
@@ -670,7 +717,9 @@ def train_maddpg(
                 # Note: prev_action_matrix persists across episodes for visualization
 
                 # Print progress
-                print(f"Episode {episode} - Avg Reward: {avg_reward:.3f}, Best: {best_reward:.3f}, Steps: {total_steps}")
+                consistency_active = maddpg.training_step >= consistency_warmup_steps
+                print(f"Episode {episode} - Avg Reward: {avg_reward:.3f}, Best: {best_reward:.3f}, "
+                      f"Steps: {total_steps}, Consistency: {'ON' if consistency_active else 'warmup'}")
 
             # Periodic checkpoint saving
             if total_steps % save_freq == 0:
@@ -718,6 +767,8 @@ def train_maddpg(
         - Training time: {hours}h {minutes}m {seconds}s
         - Final buffer size: {replay_buffer.size}/{buffer_size}
         - Final noise scale: {noise_scale:.6f}
+        - Consistency loss enabled: {consistency_enable}
+        - Consistency warmup complete: {maddpg.training_step >= consistency_warmup_steps}
         """
 
         writer.add_text('Summary', summary_text)
@@ -803,14 +854,14 @@ def find_latest_checkpoint(checkpoint_dir):
     return None, None
 
 def main():
-    parser = argparse.ArgumentParser(description='Train MADDPG with CNN for patch-based STW control')
+    parser = argparse.ArgumentParser(description='Train MADDPG with consistency loss for patch-based STW control')
     parser.add_argument('--resume', action='store_true',
                       help='Resume from latest checkpoint')
     parser.add_argument('--checkpoint', type=str,
                       help='Resume from specific checkpoint')
     parser.add_argument('--device', type=str, default=None,
                       help='Device to run on (cuda or cpu)')
-    parser.add_argument('--config', type=str, default='config.yaml',
+    parser.add_argument('--config', type=str, default='config_consistency.yaml',
                       help='Path to configuration file')
     args = parser.parse_args()
 
@@ -818,8 +869,8 @@ def main():
     config = load_config(args.config)
 
     # Setup directories
-    checkpoint_dir = "./checkpoints_pettingzoo_cnn"
-    logs_dir = "./logs_pettingzoo_cnn"
+    checkpoint_dir = "./checkpoints_consistency"
+    logs_dir = "./logs_consistency"
 
     # Handle resuming training
     checkpoint_path = None
@@ -841,9 +892,9 @@ def main():
             print("No valid checkpoint found. Starting fresh training.")
 
     # Print training setup summary
-    print("\n" + "="*50)
-    print("STW PettingZoo MADDPG Training with CNN Policies")
-    print("="*50)
+    print("\n" + "="*60)
+    print("STW MADDPG Training with Observation-Similarity Consistency")
+    print("="*60)
     print(f"Configuration file: {args.config}")
     print(f"Checkpoint directory: {checkpoint_dir}")
     print(f"Logs directory: {logs_dir}")
@@ -851,10 +902,10 @@ def main():
     if checkpoint_path:
         print(f"Buffer file: {buffer_path if buffer_path else 'None - Using empty buffer'}")
     print(f"Device: {args.device if args.device else 'Auto-detect'}")
-    print("="*50 + "\n")
+    print("="*60 + "\n")
 
     # Train MADDPG agents
-    train_maddpg(
+    train_maddpg_consistency(
         config=config,
         checkpoint_dir=checkpoint_dir,
         logs_dir=logs_dir,

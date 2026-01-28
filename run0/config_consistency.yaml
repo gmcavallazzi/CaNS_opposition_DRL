@@ -1,0 +1,125 @@
+# Configuration for MADDPG with Observation-Similarity Consistency Loss
+# This config is tuned for smooth multi-agent control with reduced patch boundary discontinuities
+
+# General parameters
+total_timesteps: 1800000  # Total training steps
+maxprocs: [64]  # Number of MPI processes for CaNS
+
+# Network architecture for CNN-based agents
+net_arch:
+  actor_channels: [16, 32]     # CNN encoder channels for actor
+  critic_conv: [32, 64, 32]    # Convolutional layers for critic
+  critic_mlp: [256, 128]       # MLP layers after convolution for critic
+  similarity_dim: 16           # Dimension of similarity features for consistency loss
+
+# Action space parameters
+action:
+  om_max: 0.064
+  scaling_factor: 2.0  # Multiplier for actions sent to CaNS
+
+# Grid parameters
+grid:
+  target:
+    i: 64  # Full domain size (reconstructed from 8x8 patches)
+    j: 64
+
+# Reward parameters
+reward:
+  dpdx:
+    uncontrolled: -0.0042  # Natural flow without control (baseline)
+    target: -0.002         # Target for good control performance
+    max: -0.0018          # Excellent control (kept for reference)
+  global_weight: 10.0       # Increased to amplify drag reduction signal
+  diversity:
+    enable: false
+    weight: -0.1
+    min_std_threshold: 0.01
+
+# Model parameters
+model:
+  learning_rate: 0.00025        # Actor learning rate
+  critic_learning_rate: 0.00008  # Critic learning rate
+  buffer_size: 5_000_000
+  weight_decay: 0.00001  # L2 regularization
+  batch_size: 32
+  tau: 0.005  # Soft update coefficient
+  gamma: 0.995  # Discount factor
+  train_freq: 300  # Steps between training updates
+  gradient_steps: 64  # Gradient steps per update
+  learning_starts: 5400  # Warmup: collect 3 episodes of data before training starts
+
+  # Smoothness constraints
+  smoothness:
+    # IMPORTANT: lambda_temporal is set to 0 because comparing current actions
+    # to replay buffer actions from OLD policy creates confusing gradients
+    # and slows policy improvement. Observation-consistency handles coordination.
+    lambda_temporal: 0.0     # Disabled - causes confusion with old policy actions
+    lambda_spatial: 0.5      # Keep: within-patch smoothness (finite differences)
+    lambda_zero: 0.1         # Keep: per-agent zero-mean constraint
+
+    # NEW: Observation-similarity consistency loss
+    # Core idea: If two observations are similar (in learned feature space),
+    # their corresponding actions should be similar.
+    consistency:
+      enable: true
+      lambda: 0.1            # Start low, increase if still aggressive (try 0.1 -> 0.5)
+      tau_similarity: 0.9    # Threshold for considering observations "similar" (0.85-0.95)
+      margin: 0.1            # Allowed action difference before penalty (0.05-0.2)
+      boundary_only: true    # Focus on patch edges for smoother transitions
+      warmup_steps: 5000     # Training steps before enabling consistency loss
+
+  # Exploration noise schedule
+  action_noise:
+    initial_sigma: 0.1     # Starting noise level
+    final_sigma: 0.01      # Final noise level
+    decay_episodes: 200    # Episodes to decay from initial to final
+    decay_type: "exponential"  # "linear", "exponential", or "polynomial"
+
+# Field shift parameters (for data augmentation)
+field_shift:
+  enable: true
+  dt: 0.0765  # Time step for shifting
+  domain_size:
+    Lx: 2.67  # Domain length in x direction
+    Ly: 0.8   # Domain length in y direction
+
+# Training parameters
+training:
+  start_episode_length: 1800  # Episode length in steps
+  save_freq: 3600  # Save checkpoint every N steps
+  gradient_clip: 0.5  # Gradient clipping threshold
+  xavier_init_gain: 1.5  # Xavier initialization gain
+
+  # Gradient monitoring and adaptive control
+  gradient_monitoring:
+    enable: true
+    log_frequency: 100  # Log gradient metrics every N steps
+    explosion_threshold: 50.0  # Gradient norm threshold for explosion
+    vanishing_threshold: 1e-6  # Minimum gradient norm for vanishing
+    adaptive_clipping: true  # Dynamically adjust gradient clipping
+    lr_reduction_factor: 0.95  # Factor to reduce LR when gradients explode
+    track_layer_wise: true  # Track gradients for individual layers
+
+# ==============================================================================
+# HYPERPARAMETER TUNING GUIDE
+# ==============================================================================
+#
+# IF POLICY BECOMES TOO STIFF (drag reduction drops, actions too uniform):
+#   - Decrease consistency.lambda: 0.1 -> 0.01
+#   - Increase consistency.tau_similarity: 0.9 -> 0.95 (fewer pairs considered)
+#   - Increase consistency.margin: 0.1 -> 0.2 (more tolerance)
+#
+# IF POLICY IS STILL TOO AGGRESSIVE (sharp boundaries remain):
+#   - Increase consistency.lambda: 0.1 -> 0.5
+#   - Decrease consistency.tau_similarity: 0.9 -> 0.85 (more pairs considered)
+#   - Decrease consistency.margin: 0.1 -> 0.05 (less tolerance)
+#
+# RECOMMENDED STARTING POINT (current config):
+#   - lambda_temporal: 0.0 (disabled)
+#   - lambda_spatial: 0.5
+#   - lambda_zero: 0.1
+#   - consistency.lambda: 0.1
+#   - consistency.tau_similarity: 0.9
+#   - consistency.margin: 0.1
+#   - consistency.boundary_only: true
+# ==============================================================================

@@ -234,6 +234,7 @@ def train_maddpg(
     batch_size = config['model']['batch_size']
     gradient_steps = config['model']['gradient_steps']
     train_freq = config['model']['train_freq']
+    learning_starts = config['model'].get('learning_starts', batch_size)  # Warmup steps before training
     save_freq = config['training']['save_freq']
     buffer_size = config['model']['buffer_size']
 
@@ -397,8 +398,8 @@ def train_maddpg(
             episode_steps += 1
             total_steps += 1
 
-            # Train networks
-            if replay_buffer.size > batch_size and total_steps % train_freq == 0:
+            # Train networks (only after warmup period)
+            if replay_buffer.size > learning_starts and total_steps % train_freq == 0:
                 batch_critic_losses = []
                 batch_actor_losses = []
                 batch_temporal_losses = []
