@@ -68,7 +68,7 @@ parser.add_argument('--energy-threshold', type=float, default=0.99,
                     help='Energy threshold for mode selection (default: 0.99)')
 parser.add_argument('--n-modes-plot', type=int, default=6,
                     help='Number of modes to plot (default: 6)')
-parser.add_argument('--n-components', type=int, default=20,
+parser.add_argument('--n-components', type=int, default=100,
                     help='Max components for randomized SVD (default: 20)')
 parser.add_argument('--no-normalize', action='store_true',
                     help='Disable field normalization')
