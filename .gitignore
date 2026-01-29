@@ -47,3 +47,4 @@ pod_analysis/*png
 pod_analysis/*dat
 pod_analysis/*bin
 pod_results_vez
+pod_clean_results
