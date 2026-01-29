@@ -43,3 +43,7 @@ LICENSE
 # exclude minimal model inspector
 inspect_model_minimal.py
 
+pod_analysis/*png
+pod_analysis/*dat
+pod_analysis/*bin
+
