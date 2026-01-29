@@ -28,12 +28,15 @@ Output:
 """
 
 import numpy as np
+import matplotlib
+matplotlib.use('Agg')  # Non-interactive backend for HPC
 import matplotlib.pyplot as plt
 import glob
 import argparse
 from pathlib import Path
 from sklearn.utils.extmath import randomized_svd
 from tqdm import tqdm
+from joblib import Parallel, delayed
 
 # Parse command-line arguments
 parser = argparse.ArgumentParser(description='POD Analysis for vertical velocity (vez) field')
@@ -49,12 +52,14 @@ parser.add_argument('--energy-threshold', type=float, default=0.99,
                     help='Energy threshold for mode selection (default: 0.99)')
 parser.add_argument('--n-modes-plot', type=int, default=6,
                     help='Number of modes to plot (default: 6)')
-parser.add_argument('--n-components', type=int, default=80,
-                    help='Max components for randomized SVD (default: 80)')
+parser.add_argument('--n-components', type=int, default=20,
+                    help='Max components for randomized SVD (default: 20)')
 parser.add_argument('--no-normalize', action='store_true',
                     help='Disable field normalization')
 parser.add_argument('--full-svd', action='store_true',
                     help='Use full SVD instead of randomized SVD')
+parser.add_argument('--n-jobs', type=int, default=1,
+                    help='Number of parallel jobs for data loading (default: 1)')
 
 args = parser.parse_args()
 
@@ -63,7 +68,7 @@ data_dir = Path(args.data_dir)
 output_dir = Path(args.output_dir)
 output_dir.mkdir(parents=True, exist_ok=True)
 
-nx, ny = 64, 64
+nx, ny = 192, 192  # Updated to 192x192 grid
 n_snapshots = args.n_snapshots
 start_snapshot = args.start_snapshot
 energy_threshold = args.energy_threshold
@@ -71,6 +76,7 @@ use_randomized_svd = not args.full_svd
 n_components = args.n_components
 normalize_fields = not args.no_normalize
 n_modes_to_plot = args.n_modes_plot
+n_jobs = args.n_jobs
 
 print("="*80)
 print("POD ANALYSIS - VERTICAL VELOCITY (VEZ)")
@@ -113,10 +119,24 @@ print(f"Loading snapshots {start_snapshot} to {n_snapshots}...")
 # Load data - single channel: vez
 field_data = np.zeros((n_snapshots, nx, ny), dtype=np.float32)
 
-for i in tqdm(range(n_snapshots), desc="Loading snapshots"):
-    snap_id = snapshot_ids[i + start_snapshot]  # +start_snapshot to skip first
-    vez = load_binary_field(data_dir / f'vez_slice_fld_{snap_id}.bin')
-    field_data[i] = vez
+if n_jobs > 1:
+    print(f"  Using parallel loading with {n_jobs} jobs...")
+
+    def load_snapshot(i):
+        snap_id = snapshot_ids[i + start_snapshot]
+        return load_binary_field(data_dir / f'vez_slice_fld_{snap_id}.bin')
+
+    results = Parallel(n_jobs=n_jobs, verbose=5)(
+        delayed(load_snapshot)(i) for i in range(n_snapshots)
+    )
+
+    for i, vez in enumerate(results):
+        field_data[i] = vez
+else:
+    for i in tqdm(range(n_snapshots), desc="Loading snapshots"):
+        snap_id = snapshot_ids[i + start_snapshot]  # +start_snapshot to skip first
+        vez = load_binary_field(data_dir / f'vez_slice_fld_{snap_id}.bin')
+        field_data[i] = vez
 
 print(f"\nData loaded successfully!")
 print(f"  Shape: {field_data.shape} (n_snapshots, nx, ny)")
