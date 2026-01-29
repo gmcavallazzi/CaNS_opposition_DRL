@@ -231,21 +231,15 @@ n_spatial = nx * ny
 data_matrix = field_data.reshape(n_snapshots_actual, -1)
 print(f"Data matrix: {data_matrix.shape}")
 
-# Remove spatial mean from each snapshot
-print("\nRemoving spatial mean from each snapshot...")
-spatial_means = data_matrix.mean(axis=1, keepdims=True)
-data_zero_spatial_mean = data_matrix - spatial_means
-print(f"  Spatial means removed")
-print(f"    Spatial mean range: [{spatial_means.min():.6e}, {spatial_means.max():.6e}]")
-
-# Compute temporal mean field
+# Compute temporal mean field (average each spatial point across all time)
 print("\nComputing temporal mean field...")
-mean_field = data_zero_spatial_mean.mean(axis=0)
-data_centered = data_zero_spatial_mean - mean_field
+mean_field = data_matrix.mean(axis=0)
+data_centered = data_matrix - mean_field
 
 print(f"  Temporal mean field computed")
 print(f"    Mean: {mean_field.mean():.6e}")
 print(f"    Std: {mean_field.std():.6e}")
+print(f"    Range: [{mean_field.min():.6e}, {mean_field.max():.6e}]")
 
 # Normalize field by std
 if normalize_fields:
@@ -563,10 +557,6 @@ mean_field_reshaped = mean_field.reshape(nx, ny)
 np.save(output_dir / 'pod_mean_field.npy', mean_field_reshaped)
 print(f"  Saved: pod_mean_field.npy")
 
-# Save spatial means per snapshot
-np.save(output_dir / 'pod_spatial_means.npy', spatial_means)
-print(f"  Saved: pod_spatial_means.npy")
-
 # Save std field (always save, even if it's 1.0)
 np.save(output_dir / 'pod_std_field.npy', std_field)
 print(f"  Saved: pod_std_field.npy")
@@ -624,7 +614,6 @@ print(f"\nData files:")
 print(f"  - Coefficients: pod_coefficients.npz ({n_modes_threshold} modes, {n_snapshots_actual} snapshots)")
 print(f"  - Modes: pod_modes.npy ({n_modes_threshold}, {nx}, {ny})")
 print(f"  - Mean field: pod_mean_field.npy ({nx}, {ny})")
-print(f"  - Spatial means: pod_spatial_means.npy ({n_snapshots_actual},)")
 print(f"  - Std field: pod_std_field.npy")
 print(f"  - Metadata: pod_metadata.npz")
 print(f"  - Summary: pod_summary.txt")
