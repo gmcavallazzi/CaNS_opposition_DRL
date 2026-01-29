@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 from tqdm import tqdm
 from joblib import Parallel, delayed
+from sklearn.utils.extmath import randomized_svd
 import glob
 
 # Import read function
@@ -27,7 +28,8 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--data-dir', required=True)
 parser.add_argument('--output-dir', default='./pod_clean_results')
 parser.add_argument('--n-jobs', type=int, default=1)
-parser.add_argument('--n-modes', type=int, default=20, help='Number of modes to extract')
+parser.add_argument('--n-modes', type=int, default=20, help='Number of modes to save')
+parser.add_argument('--n-compute', type=int, default=100, help='Number of modes to compute (for energy spectrum)')
 args = parser.parse_args()
 
 data_dir = Path(args.data_dir)
@@ -84,18 +86,20 @@ print(f"   Mean field: mean={X_mean.mean():.6e}, std={X_mean.std():.6e}")
 
 # SVD: X_centered = U @ diag(S) @ Vt
 # U: temporal, Vt: spatial modes
-print(f"   Computing SVD...")
-U, S, Vt = np.linalg.svd(X_centered, full_matrices=False)
+n_compute = min(args.n_compute, n_snapshots - 1, X.shape[1] - 1)
+print(f"   Computing randomized SVD ({n_compute} modes)...")
+U, S, Vt = randomized_svd(X_centered, n_components=n_compute, n_iter=5, random_state=42)
 
-print(f"   U shape: {U.shape}")  # (n_snapshots, n_snapshots)
-print(f"   S shape: {S.shape}")  # (min(n_snapshots, n_points),)
-print(f"   Vt shape: {Vt.shape}") # (min(...), n_points)
+print(f"   U shape: {U.shape}")  # (n_snapshots, n_compute)
+print(f"   S shape: {S.shape}")  # (n_compute,)
+print(f"   Vt shape: {Vt.shape}") # (n_compute, n_points)
 
-# Spatial modes are rows of Vt
-spatial_modes = Vt[:args.n_modes].reshape(args.n_modes, nx, ny)
+# Spatial modes are rows of Vt (save only n_modes)
+n_save = min(args.n_modes, n_compute)
+spatial_modes = Vt[:n_save].reshape(n_save, nx, ny)
 
-# Temporal coefficients are columns of U scaled by S
-temporal_coeffs = U[:, :args.n_modes] * S[:args.n_modes]
+# Temporal coefficients are columns of U scaled by S (save only n_modes)
+temporal_coeffs = U[:, :n_save] * S[:n_save]
 
 # Energy
 energy = S**2 / n_snapshots
