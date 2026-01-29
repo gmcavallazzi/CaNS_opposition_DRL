@@ -33,10 +33,26 @@ matplotlib.use('Agg')  # Non-interactive backend for HPC
 import matplotlib.pyplot as plt
 import glob
 import argparse
+import sys
 from pathlib import Path
 from sklearn.utils.extmath import randomized_svd
 from tqdm import tqdm
 from joblib import Parallel, delayed
+
+# Import read function from parent directory
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from read_2d_slice import read_binary_2d as _read_binary_2d
+
+# Wrapper to suppress verbose output from read_binary_2d
+def read_binary_2d(filename, nx, ny, dtype=np.float64):
+    """Silent wrapper for read_binary_2d"""
+    import os
+    from io import StringIO
+    import contextlib
+
+    # Suppress stdout during read
+    with contextlib.redirect_stdout(StringIO()):
+        return _read_binary_2d(filename, nx, ny, dtype)
 
 # Parse command-line arguments
 parser = argparse.ArgumentParser(description='POD Analysis for vertical velocity (vez) field')
@@ -108,12 +124,6 @@ print("\n" + "="*80)
 print("LOADING DATA")
 print("="*80)
 
-def load_binary_field(filepath, nx=64, ny=64):
-    """Load binary field data"""
-    data = np.fromfile(filepath, dtype=np.float64)
-    if data.size != nx * ny:
-        data = np.fromfile(filepath, dtype=np.float32)
-    return data.reshape((nx, ny), order='F')
 
 # Get snapshot files
 pattern = f'vez_slice_{slice_id}_fld_*.bin'
@@ -186,7 +196,8 @@ if n_jobs > 1:
 
     def load_snapshot(i):
         snap_id = snapshot_ids[i + start_snapshot]
-        return load_binary_field(data_dir / f'vez_slice_{actual_slice}_fld_{snap_id}.bin')
+        filepath = str(data_dir / f'vez_slice_{actual_slice}_fld_{snap_id}.bin')
+        return read_binary_2d(filepath, nx, ny, dtype=np.float64)
 
     results = Parallel(n_jobs=n_jobs, verbose=5)(
         delayed(load_snapshot)(i) for i in range(n_snapshots_to_load)
@@ -196,8 +207,9 @@ if n_jobs > 1:
         field_data[i] = vez
 else:
     for i in tqdm(range(n_snapshots_to_load), desc="Loading snapshots"):
-        snap_id = snapshot_ids[i + start_snapshot]  # +start_snapshot to skip first
-        vez = load_binary_field(data_dir / f'vez_slice_{actual_slice}_fld_{snap_id}.bin')
+        snap_id = snapshot_ids[i + start_snapshot]
+        filepath = str(data_dir / f'vez_slice_{actual_slice}_fld_{snap_id}.bin')
+        vez = read_binary_2d(filepath, nx, ny, dtype=np.float64)
         field_data[i] = vez
 
 print(f"\nData loaded successfully!")
