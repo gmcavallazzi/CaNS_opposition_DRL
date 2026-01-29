@@ -44,8 +44,8 @@ parser.add_argument('--data-dir', type=str, required=True,
                     help='Path to directory containing binary field data')
 parser.add_argument('--output-dir', type=str, default='./pod_results_vez',
                     help='Path to output directory (default: ./pod_results_vez)')
-parser.add_argument('--n-snapshots', type=int, default=20000,
-                    help='Number of snapshots to load (default: 20000)')
+parser.add_argument('--n-snapshots', type=int, default=None,
+                    help='Number of snapshots to load (default: all available files)')
 parser.add_argument('--start-snapshot', type=int, default=1,
                     help='Starting snapshot index (default: 1, skip first snapshot)')
 parser.add_argument('--energy-threshold', type=float, default=0.99,
@@ -60,6 +60,8 @@ parser.add_argument('--full-svd', action='store_true',
                     help='Use full SVD instead of randomized SVD')
 parser.add_argument('--n-jobs', type=int, default=1,
                     help='Number of parallel jobs for data loading (default: 1)')
+parser.add_argument('--slice-id', type=str, default='*',
+                    help='Slice ID to load (default: * for auto-detect, or specify like "19")')
 
 args = parser.parse_args()
 
@@ -77,6 +79,7 @@ n_components = args.n_components
 normalize_fields = not args.no_normalize
 n_modes_to_plot = args.n_modes_plot
 n_jobs = args.n_jobs
+slice_id = args.slice_id
 
 print("="*80)
 print("POD ANALYSIS - VERTICAL VELOCITY (VEZ)")
@@ -84,8 +87,9 @@ print("="*80)
 print(f"\nConfiguration:")
 print(f"  Data directory: {data_dir}")
 print(f"  Output directory: {output_dir}")
+print(f"  Slice ID pattern: {slice_id}")
 print(f"  Start snapshot: {start_snapshot} (skipping first snapshot)")
-print(f"  Total snapshots: {n_snapshots}")
+print(f"  Requested snapshots: {'all available' if n_snapshots is None else n_snapshots}")
 print(f"  Grid: {nx} x {ny}")
 print(f"  Field: Vertical velocity (vez)")
 print(f"  Energy threshold: {energy_threshold*100}%")
@@ -94,6 +98,8 @@ print(f"  Field normalization: {normalize_fields}")
 print(f"  SVD method: {'Randomized' if use_randomized_svd else 'Full'}")
 if use_randomized_svd:
     print(f"  Max components: {n_components}")
+if n_jobs > 1:
+    print(f"  Parallel loading: {n_jobs} jobs")
 
 # ============================================================================
 # 1. Load all data
@@ -110,32 +116,88 @@ def load_binary_field(filepath, nx=64, ny=64):
     return data.reshape((nx, ny), order='F')
 
 # Get snapshot files
-vez_files = sorted(glob.glob(str(data_dir / 'vez_slice_fld_*.bin')))
-snapshot_ids = [Path(f).name.split('_')[-1].replace('.bin', '') for f in vez_files]
+pattern = f'vez_slice_{slice_id}_fld_*.bin'
+vez_files = sorted(glob.glob(str(data_dir / pattern)))
 
-print(f"Found {len(snapshot_ids)} snapshot files")
-print(f"Loading snapshots {start_snapshot} to {n_snapshots}...")
+if len(vez_files) == 0:
+    print(f"\nERROR: No vez files found in {data_dir}")
+    print(f"Looking for pattern: {pattern}")
+    print("\nAvailable files in directory:")
+    all_files = sorted(list(data_dir.glob('*.bin')))[:10]  # Show first 10 files
+    for f in all_files:
+        print(f"  {f.name}")
+    if len(all_files) == 0:
+        print("  (no .bin files found)")
+
+    # Try to auto-detect slice ID
+    print("\nTrying to auto-detect slice ID...")
+    test_pattern = 'vez_slice_*_fld_*.bin'
+    test_files = list(data_dir.glob(test_pattern))
+    if test_files:
+        sample_file = test_files[0].name
+        # Extract slice ID: vez_slice_19_fld_1273700.bin -> 19
+        parts = sample_file.split('_')
+        if len(parts) >= 4:
+            detected_slice = parts[2]
+            print(f"  Detected slice ID: {detected_slice}")
+            print(f"  Retry with: --slice-id {detected_slice}")
+    exit(1)
+
+# Extract snapshot IDs from filenames
+# Format: vez_slice_19_fld_1273700.bin -> 1273700
+snapshot_ids = []
+for f in vez_files:
+    filename = Path(f).name
+    # Split by underscore and get the part after 'fld_'
+    parts = filename.split('_fld_')
+    if len(parts) == 2:
+        snap_id = parts[1].replace('.bin', '')
+        snapshot_ids.append(snap_id)
+
+# Determine actual number of snapshots to load
+n_available = len(snapshot_ids) - start_snapshot
+
+# Detect actual slice ID
+first_file = Path(vez_files[0]).name
+actual_slice = first_file.split('_')[2]  # vez_slice_19_fld_... -> 19
+print(f"Detected slice ID: {actual_slice}")
+
+if n_snapshots is None:
+    # Use all available files
+    n_snapshots_to_load = n_available
+    print(f"Found {len(snapshot_ids)} total snapshot files")
+    print(f"Loading all {n_snapshots_to_load} available snapshots starting from index {start_snapshot}...")
+elif n_snapshots > n_available:
+    print(f"\nWARNING: Requested {n_snapshots} snapshots, but only {n_available} available")
+    print(f"         (after skipping first {start_snapshot})")
+    n_snapshots_to_load = n_available
+    print(f"Found {len(snapshot_ids)} total snapshot files")
+    print(f"Loading {n_snapshots_to_load} snapshots starting from index {start_snapshot}...")
+else:
+    n_snapshots_to_load = n_snapshots
+    print(f"Found {len(snapshot_ids)} total snapshot files")
+    print(f"Loading {n_snapshots_to_load} snapshots starting from index {start_snapshot}...")
 
 # Load data - single channel: vez
-field_data = np.zeros((n_snapshots, nx, ny), dtype=np.float32)
+field_data = np.zeros((n_snapshots_to_load, nx, ny), dtype=np.float32)
 
 if n_jobs > 1:
     print(f"  Using parallel loading with {n_jobs} jobs...")
 
     def load_snapshot(i):
         snap_id = snapshot_ids[i + start_snapshot]
-        return load_binary_field(data_dir / f'vez_slice_fld_{snap_id}.bin')
+        return load_binary_field(data_dir / f'vez_slice_{actual_slice}_fld_{snap_id}.bin')
 
     results = Parallel(n_jobs=n_jobs, verbose=5)(
-        delayed(load_snapshot)(i) for i in range(n_snapshots)
+        delayed(load_snapshot)(i) for i in range(n_snapshots_to_load)
     )
 
     for i, vez in enumerate(results):
         field_data[i] = vez
 else:
-    for i in tqdm(range(n_snapshots), desc="Loading snapshots"):
+    for i in tqdm(range(n_snapshots_to_load), desc="Loading snapshots"):
         snap_id = snapshot_ids[i + start_snapshot]  # +start_snapshot to skip first
-        vez = load_binary_field(data_dir / f'vez_slice_fld_{snap_id}.bin')
+        vez = load_binary_field(data_dir / f'vez_slice_{actual_slice}_fld_{snap_id}.bin')
         field_data[i] = vez
 
 print(f"\nData loaded successfully!")
