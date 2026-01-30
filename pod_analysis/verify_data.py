@@ -47,10 +47,10 @@ print("="*70)
 fig, axes = plt.subplots(2, 3, figsize=(15, 10))
 axes = axes.flatten()
 
-sample_indices = [0, 100, 500, 1000, 5000, 10000]
+# Sample evenly spaced snapshots across the dataset
+n_samples = 6
+sample_indices = [int(i * (len(files) - 1) / (n_samples - 1)) for i in range(n_samples)]
 for i, idx in enumerate(sample_indices):
-    if idx >= len(files):
-        idx = len(files) - 1
 
     data = read_quiet(files[idx], nx, ny)
 
