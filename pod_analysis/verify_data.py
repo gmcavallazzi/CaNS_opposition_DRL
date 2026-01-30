@@ -6,6 +6,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import sys
 import glob
+import argparse
 from pathlib import Path
 from io import StringIO
 import contextlib
@@ -18,8 +19,15 @@ def read_quiet(filepath, nx, ny):
     with contextlib.redirect_stdout(StringIO()):
         return read_binary_2d(filepath, nx, ny, dtype=np.float64)
 
-nx, ny = 192, 192
-data_dir = Path(sys.argv[1]) if len(sys.argv) > 1 else Path('.')
+# Parse arguments
+parser = argparse.ArgumentParser(description='Verify if dataset has coherent structures')
+parser.add_argument('data_dir', nargs='?', default='.', help='Path to data directory')
+parser.add_argument('--nx', type=int, default=192, help='Grid size in x direction (default: 192)')
+parser.add_argument('--ny', type=int, default=192, help='Grid size in y direction (default: 192)')
+args = parser.parse_args()
+
+nx, ny = args.nx, args.ny
+data_dir = Path(args.data_dir)
 
 # Find files
 files = sorted(glob.glob(str(data_dir / 'vez_slice_*_fld_*.bin')))

@@ -78,6 +78,10 @@ parser.add_argument('--n-jobs', type=int, default=1,
                     help='Number of parallel jobs for data loading (default: 1)')
 parser.add_argument('--slice-id', type=str, default='*',
                     help='Slice ID to load (default: * for auto-detect, or specify like "19")')
+parser.add_argument('--nx', type=int, default=192,
+                    help='Grid size in x direction (default: 192)')
+parser.add_argument('--ny', type=int, default=192,
+                    help='Grid size in y direction (default: 192)')
 
 args = parser.parse_args()
 
@@ -86,7 +90,7 @@ data_dir = Path(args.data_dir)
 output_dir = Path(args.output_dir)
 output_dir.mkdir(parents=True, exist_ok=True)
 
-nx, ny = 192, 192  # Updated to 192x192 grid
+nx, ny = args.nx, args.ny
 n_snapshots = args.n_snapshots
 start_snapshot = args.start_snapshot
 energy_threshold = args.energy_threshold

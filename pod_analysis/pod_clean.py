@@ -30,12 +30,14 @@ parser.add_argument('--output-dir', default='./pod_clean_results')
 parser.add_argument('--n-jobs', type=int, default=1)
 parser.add_argument('--n-modes', type=int, default=20, help='Number of modes to save')
 parser.add_argument('--n-compute', type=int, default=100, help='Number of modes to compute (for energy spectrum)')
+parser.add_argument('--nx', type=int, default=192, help='Grid size in x direction (default: 192)')
+parser.add_argument('--ny', type=int, default=192, help='Grid size in y direction (default: 192)')
 args = parser.parse_args()
 
 data_dir = Path(args.data_dir)
 output_dir = Path(args.output_dir)
 output_dir.mkdir(exist_ok=True)
-nx, ny = 192, 192
+nx, ny = args.nx, args.ny
 
 print("="*80)
 print("CLEAN POD IMPLEMENTATION")
