@@ -32,6 +32,7 @@ parser.add_argument('--n-modes', type=int, default=20, help='Number of modes to 
 parser.add_argument('--n-compute', type=int, default=100, help='Number of modes to compute (for energy spectrum)')
 parser.add_argument('--nx', type=int, default=192, help='Grid size in x direction (default: 192)')
 parser.add_argument('--ny', type=int, default=192, help='Grid size in y direction (default: 192)')
+parser.add_argument('--slice-id', type=int, default=None, help='Specific slice ID to process (default: all slices)')
 args = parser.parse_args()
 
 data_dir = Path(args.data_dir)
@@ -49,7 +50,10 @@ print("="*80)
 print("\n1. LOADING DATA")
 
 # Find files
-pattern = 'vez_slice_*_fld_*.bin'
+if args.slice_id is not None:
+    pattern = f'vez_slice_{args.slice_id}_fld_*.bin'
+else:
+    pattern = 'vez_slice_*_fld_*.bin'
 files = sorted(glob.glob(str(data_dir / pattern)))
 print(f"   Found {len(files)} files")
 
