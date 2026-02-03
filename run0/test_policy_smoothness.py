@@ -22,7 +22,6 @@ from tqdm import tqdm
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-import h5py
 import json
 
 from stwEnv_pettingzoo import STWParallelEnv
@@ -359,15 +358,11 @@ def analyze_policy_smoothness(checkpoint_path, config_path, num_episodes=5,
         print("SAVING RESULTS")
         print("="*80)
 
-        # Save as HDF5
-        h5_path = os.path.join(results_dir, 'smoothness_analysis.h5')
-        with h5py.File(h5_path, 'w') as f:
-            for ep_idx, ep_data in enumerate(all_episodes_data):
-                grp = f.create_group(f'episode_{ep_idx}')
-                for key, value in ep_data.items():
-                    grp.create_dataset(key, data=value)
-
-        print(f"Saved HDF5: {h5_path}")
+        # Save episode data as NPZ files
+        for ep_idx, ep_data in enumerate(all_episodes_data):
+            npz_path = os.path.join(results_dir, f'episode_{ep_idx}_data.npz')
+            np.savez(npz_path, **ep_data)
+            print(f"Saved episode {ep_idx} data: {npz_path}")
 
         # Save summary JSON
         summary = {
