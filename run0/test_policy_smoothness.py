@@ -182,7 +182,7 @@ def analyze_policy_smoothness(checkpoint_path, config_path, num_episodes=5,
 
             # Store metrics
             episode_data['rewards'].append(np.mean(list(rewards.values())))
-            episode_data['dpdx'].append(float(infos['dpdx']))
+            episode_data['dpdx'].append(float(infos[agents[0]].get('dpdx', 0)))
 
         # Convert to arrays
         episode_data['observations'] = np.array(episode_data['observations'])  # [T, 64, 2, 8, 8]
