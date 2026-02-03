@@ -22,7 +22,6 @@ from tqdm import tqdm
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-from scipy import fft
 import h5py
 import json
 
@@ -303,8 +302,8 @@ def analyze_policy_smoothness(checkpoint_path, config_path, num_episodes=5,
 
         # TEMPORAL FFT (average over agents and spatial dims)
         actions_time_avg = actions.mean(axis=(1, 2, 3))  # [T]
-        temporal_fft = np.abs(fft.rfft(actions_time_avg))
-        temporal_freqs = fft.rfftfreq(T, d=dt)
+        temporal_fft = np.abs(np.fft.rfft(actions_time_avg))
+        temporal_freqs = np.fft.rfftfreq(T, d=dt)
 
         # Find dominant frequencies (excluding DC)
         top_temporal_idx = np.argsort(temporal_fft[1:])[-5:][::-1] + 1
@@ -314,7 +313,7 @@ def analyze_policy_smoothness(checkpoint_path, config_path, num_episodes=5,
         # SPATIAL FFT (average over time and patch spatial dims)
         actions_grid = actions.reshape(T, 8, 8, H, W)  # [T, 8_i, 8_j, 8, 8]
         actions_spatial_avg = actions_grid.mean(axis=(0, 3, 4))  # [8_i, 8_j]
-        spatial_fft_2d = np.abs(fft.rfft2(actions_spatial_avg))
+        spatial_fft_2d = np.abs(np.fft.rfft2(actions_spatial_avg))
 
         # Find dominant spatial modes
         flat_fft = spatial_fft_2d.flatten()
