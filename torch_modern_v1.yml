@@ -1,0 +1,20 @@
+eame: torch_modern
+channels:
+  - pytorch
+  - defaults
+dependencies:
+  - python=3.10
+  - pytorch=1.13.*
+  - torchvision
+  - torchaudio
+  - h5py
+  - ffmpeg
+  - scikit-image
+  - matplotlib
+  - numpy<2.0
+  - pyyaml
+  - scipy
+  - tensorboard
+  - pip
+  - pip:
+    - tensorboard

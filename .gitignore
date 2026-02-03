@@ -51,3 +51,5 @@ pod_clean_results
 pod_opp_small
 
 verify*png
+logs*/
+checkpoints*/

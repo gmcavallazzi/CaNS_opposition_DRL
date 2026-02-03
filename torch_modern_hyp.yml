@@ -1,0 +1,14 @@
+name: torch_modern
+channels:
+  - nvidia
+  - defaults
+dependencies:
+  - python=3.10
+  - h5py
+  - ffmpeg
+  - scikit-image
+  - matplotlib
+  - numpy
+  - pyyaml
+  - scipy
+prefix: /users/addh496/sharedscratch/anaconda3/envs/torch_modern
