@@ -4,7 +4,7 @@ This directory contains the LaTeX documentation for the action memory implementa
 
 ## Document Contents
 
-**`action_memory_implementation.tex`** - Main LaTeX document covering:
+**`action_memory_implementation.tex`** - Main LaTeX document (15 pages) covering:
 
 1. **Introduction** - Problem statement and root cause analysis of bang-bang control
 2. **Mathematical Formulation** - Rigorous MDP formulation with and without action memory
@@ -12,7 +12,18 @@ This directory contains the LaTeX documentation for the action memory implementa
 4. **Critic Architecture** - Analysis of apparent redundancy and why it's necessary
 5. **Implementation Details** - Environment, network architectures, and training algorithm
 6. **Backwards Compatibility** - How the system maintains compatibility with old configs
-7. **Expected Results** - Predicted improvements in smoothness and performance metrics
+7. **Zero-Mean Constraint** - Critical implementation details for gradient flow and physical validity
+8. **Expected Results** - Predicted improvements in smoothness and performance metrics
+
+**`network_diagram.tex`** - Standalone TikZ diagram showing:
+
+- Complete network architecture (actor + critic)
+- Observation flow with 3-channel inputs (u, w, prev_action)
+- Differentiable zero-mean correction
+- Noise addition and clipping during training
+- Gradient backpropagation paths
+- Action memory feedback loop
+- Training vs inference differences
 
 ## Compilation
 
@@ -26,22 +37,27 @@ This directory contains the LaTeX documentation for the action memory implementa
 **Using Make (recommended):**
 ```bash
 cd report
-make              # Compile PDF
-make view         # Compile and open PDF (macOS)
+make              # Compile both document and diagram
+make view         # Compile and open main document (macOS)
 make clean        # Remove auxiliary files
-make cleanall     # Remove all generated files including PDF
+make cleanall     # Remove all generated files including PDFs
 make rebuild      # Clean and rebuild
 ```
 
 **Manual compilation:**
 ```bash
+# Main document
 pdflatex action_memory_implementation.tex
 pdflatex action_memory_implementation.tex  # Run twice for cross-references
+
+# Network diagram
+pdflatex network_diagram.tex
 ```
 
-### Output
+### Output Files
 
-The compiled PDF will be: `action_memory_implementation.pdf`
+- `action_memory_implementation.pdf` - Full technical report (15 pages)
+- `network_diagram.pdf` - Network architecture diagram (1 page, standalone)
 
 ## Key Equations
 
@@ -80,9 +96,12 @@ Creates temporal coupling: choosing `a_t` affects the next state because the nex
 
 ```
 report/
-├── action_memory_implementation.tex    # Main LaTeX document
+├── action_memory_implementation.tex    # Main LaTeX document (15 pages)
+├── network_diagram.tex                 # TikZ network architecture diagram
 ├── Makefile                            # Build automation
-└── README.md                           # This file
+├── README.md                           # This file
+├── action_memory_implementation.pdf    # Compiled main document
+└── network_diagram.pdf                 # Compiled diagram
 ```
 
 ## Notes

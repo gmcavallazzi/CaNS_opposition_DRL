@@ -9,7 +9,6 @@
 \usepackage{algorithm}
 \usepackage{algorithmic}
 \usepackage{booktabs}
-\usepackage{xcolor}
 \usepackage{listings}
 \usepackage{geometry}
 \geometry{margin=1in}
@@ -843,10 +842,10 @@ With these fixes:
 \toprule
 Approach & Gradients See Constraint & Physically Valid \\
 \midrule
-Post-processing + per-tile loss & \textcolor{red}{No} & \textcolor{red}{No} \\
-Differentiable + per-tile loss & \textcolor{green}{Yes} & \textcolor{red}{No} \\
-Post-processing + global loss & \textcolor{red}{No} & \textcolor{green}{Yes} \\
-\textbf{Differentiable + global loss} & \textcolor{green}{Yes} & \textcolor{green}{Yes} \\
+Post-processing + per-tile loss & No & No \\
+Differentiable + per-tile loss & Yes & No \\
+Post-processing + global loss & No & Yes \\
+\textbf{Differentiable + global loss} & \textbf{Yes} & \textbf{Yes} \\
 \bottomrule
 \end{tabular}
 \caption{Comparison of zero-mean constraint approaches}
@@ -879,9 +878,9 @@ provides the policy with the necessary information to learn smooth temporal cont
 \toprule
 Approach & Markovian & Credit Assignment & Adaptive \\
 \midrule
-Temporal loss on replay & \textcolor{red}{No} & \textcolor{red}{Confused} & \textcolor{orange}{Partial} \\
-External filtering & \textcolor{green}{Yes} & \textcolor{red}{Broken} & \textcolor{red}{No} \\
-\textbf{Prev action in obs} & \textcolor{green}{Yes} & \textcolor{green}{Clean} & \textcolor{green}{Yes} \\
+Temporal loss on replay & No & Confused & Partial \\
+External filtering & Yes & Broken & No \\
+\textbf{Prev action in obs} & \textbf{Yes} & \textbf{Clean} & \textbf{Yes} \\
 \bottomrule
 \end{tabular}
 \caption{Comparison of approaches to temporal smoothness}

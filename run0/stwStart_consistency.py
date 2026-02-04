@@ -357,6 +357,16 @@ def train_maddpg_consistency(
     episode_consistency_losses = []  # NEW: track consistency loss
     episode_actions = []
 
+    # NEW: Track gradient metrics per episode (for end-of-episode logging)
+    episode_actor_grad_norms = []
+    episode_critic_grad_norms = []
+    episode_actor_exploding = []
+    episode_actor_vanishing = []
+    episode_critic_exploding = []
+    episode_critic_vanishing = []
+    episode_actor_lr = []
+    episode_critic_lr = []
+
     # Action statistics tracking
     episode_reward_history = []
     episode_action_mean_history = []
@@ -543,34 +553,19 @@ def train_maddpg_consistency(
                         if critic_exploding:
                             maddpg.gradient_clip = min(critic_clip, maddpg.gradient_clip)
 
-                    # PERFORMANCE OPTIMIZATION: Log detailed gradient metrics only every 50 steps
-                    # Episode-level aggregates are still logged (more useful for monitoring)
-                    log_step_metrics = (total_steps % 50 == 0)
+                    # Collect gradient metrics for end-of-episode logging
+                    episode_actor_grad_norms.append(actor_metrics['global_norm'])
+                    episode_critic_grad_norms.append(critic_metrics['global_norm'])
+                    episode_actor_exploding.append(float(actor_exploding))
+                    episode_actor_vanishing.append(float(actor_vanishing))
+                    episode_critic_exploding.append(float(critic_exploding))
+                    episode_critic_vanishing.append(float(critic_vanishing))
 
-                    if log_step_metrics:
-                        # Log gradient metrics to TensorBoard
-                        writer.add_scalar('Gradients/Actor/global_norm', actor_metrics['global_norm'], total_steps)
-                        writer.add_scalar('Gradients/Actor/mean_norm', actor_metrics['mean_norm'], total_steps)
-                        writer.add_scalar('Gradients/Actor/max_norm', actor_metrics['max_norm'], total_steps)
-                        writer.add_scalar('Gradients/Actor/std_norm', actor_metrics['std_norm'], total_steps)
-
-                        writer.add_scalar('Gradients/Critic/global_norm', critic_metrics['global_norm'], total_steps)
-                        writer.add_scalar('Gradients/Critic/mean_norm', critic_metrics['mean_norm'], total_steps)
-                        writer.add_scalar('Gradients/Critic/max_norm', critic_metrics['max_norm'], total_steps)
-                        writer.add_scalar('Gradients/Critic/std_norm', critic_metrics['std_norm'], total_steps)
-
-                        # Log health indicators
-                        writer.add_scalar('Gradients/Actor/is_exploding', float(actor_exploding), total_steps)
-                        writer.add_scalar('Gradients/Actor/is_vanishing', float(actor_vanishing), total_steps)
-                        writer.add_scalar('Gradients/Critic/is_exploding', float(critic_exploding), total_steps)
-                        writer.add_scalar('Gradients/Critic/is_vanishing', float(critic_vanishing), total_steps)
-
-                        # Log current learning rates
-                        actor_lr = maddpg.actor_optimizer.param_groups[0]['lr']
-                        critic_lr = maddpg.critic_optimizer.param_groups[0]['lr']
-                        writer.add_scalar('Training/actor_lr', actor_lr, total_steps)
-                        writer.add_scalar('Training/critic_lr', critic_lr, total_steps)
-                        writer.add_scalar('Training/gradient_clip', maddpg.gradient_clip, total_steps)
+                    # Track learning rates
+                    actor_lr = maddpg.actor_optimizer.param_groups[0]['lr']
+                    critic_lr = maddpg.critic_optimizer.param_groups[0]['lr']
+                    episode_actor_lr.append(actor_lr)
+                    episode_critic_lr.append(critic_lr)
 
                     # Layer-wise gradient tracking (optional, even less frequent)
                     if grad_config.get('track_layer_wise', False) and total_steps % 200 == 0:
@@ -663,6 +658,19 @@ def train_maddpg_consistency(
                     writer.add_scalar('Episode/action_mean', np.mean(episode_action_mean_history), episode)
                     writer.add_scalar('Episode/action_std', np.mean(episode_action_std_history), episode)
 
+                # NEW: Log gradient metrics averaged over episode
+                if episode_actor_grad_norms:
+                    writer.add_scalar('Episode/actor_grad_norm', np.mean(episode_actor_grad_norms), episode)
+                    writer.add_scalar('Episode/critic_grad_norm', np.mean(episode_critic_grad_norms), episode)
+                    writer.add_scalar('Episode/actor_exploding', np.mean(episode_actor_exploding), episode)
+                    writer.add_scalar('Episode/actor_vanishing', np.mean(episode_actor_vanishing), episode)
+                    writer.add_scalar('Episode/critic_exploding', np.mean(episode_critic_exploding), episode)
+                    writer.add_scalar('Episode/critic_vanishing', np.mean(episode_critic_vanishing), episode)
+                if episode_actor_lr:
+                    writer.add_scalar('Episode/actor_lr', np.mean(episode_actor_lr), episode)
+                    writer.add_scalar('Episode/critic_lr', np.mean(episode_critic_lr), episode)
+                    writer.add_scalar('Episode/gradient_clip', maddpg.gradient_clip, episode)
+
                 # Log current noise scale for exploration tracking
                 current_noise_scale = compute_noise_scale(episode, config)
                 writer.add_scalar('Episode/noise_scale', current_noise_scale, episode)
@@ -742,6 +750,16 @@ def train_maddpg_consistency(
                 episode_reward_history = []
                 episode_action_mean_history = []
                 episode_action_std_history = []
+
+                # NEW: Reset gradient tracking lists
+                episode_actor_grad_norms = []
+                episode_critic_grad_norms = []
+                episode_actor_exploding = []
+                episode_actor_vanishing = []
+                episode_critic_exploding = []
+                episode_critic_vanishing = []
+                episode_actor_lr = []
+                episode_critic_lr = []
                 # Note: prev_action_matrix persists across episodes for visualization
 
                 # Print progress
