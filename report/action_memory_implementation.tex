@@ -434,10 +434,10 @@ The environment maintains:
 
 Updated after each step:
 \begin{equation}
-    \mathbf{a}_{\text{field}}^{\text{prev}} \leftarrow \mathbf{a}_{\text{field}}^{\text{curr}} - \overline{\mathbf{a}_{\text{field}}^{\text{curr}}}
+    \mathbf{a}_{\text{field}}^{\text{prev}} \leftarrow \mathbf{a}_{\text{field}}^{\text{curr}}
 \end{equation}
 
-where the mean subtraction enforces zero-mean constraint (mass conservation).
+The zero-mean constraint is applied in the training script \emph{before} actions reach the environment (see Section~7 for details).
 
 \subsubsection{Episode Reset}
 \begin{equation}
@@ -665,7 +665,7 @@ Make the correction part of the computational graph:
 \begin{algorithm}
 \caption{Differentiable Zero-Mean (Correct)}
 \begin{algorithmic}[1]
-\STATE Forward pass all agents: $\mathbf{A}^{\text{raw}} = \pi_\theta(\mathbf{S})$
+\STATE Forward pass all agents: $\mathbf{A}^{\text{raw}} = \pi_\theta(\mathbf{S})$ \quad (from $\tanh \to [-1,1]$)
 \STATE Compute mean (differentiable): $\mu = \text{mean}(\mathbf{A}^{\text{raw}})$
 \STATE Apply correction (differentiable): $\mathbf{A} = \mathbf{A}^{\text{raw}} - \mu$
 \STATE Compute loss: $\mathcal{L} = -Q(\mathbf{S}, \mathbf{A}) + \lambda_s \mathcal{L}_{\text{spatial}} + \cdots$
@@ -681,6 +681,51 @@ Make the correction part of the computational graph:
     \item Correction magnitude $|\mu|$ becomes smaller during training
     \item Bang-bang oscillations from varying corrections are prevented
 \end{enumerate}
+
+\subsubsection{Interaction with Exploration Noise and Clipping}
+
+During training, exploration noise is added:
+\begin{equation}
+\mathbf{A}^{\text{noisy}} = \mathbf{A}^{\text{raw}} + \mathcal{N}(0, \sigma^2 I)
+\end{equation}
+
+where $\mathbf{A}^{\text{raw}} \in [-1, 1]$ (from $\tanh$ activation). Adding noise can push actions outside $[-1, 1]$, requiring clipping:
+\begin{equation}
+\mathbf{A}^{\text{clipped}} = \text{clip}(\mathbf{A}^{\text{noisy}}, -1, 1)
+\end{equation}
+
+\textbf{Critical issue}: Clipping breaks the zero-mean property! If $\mathbf{A}^{\text{noisy}}$ is zero-mean, $\mathbf{A}^{\text{clipped}}$ may not be.
+
+\textbf{Solution}: Apply zero-mean correction \emph{after} clipping:
+\begin{equation}
+\mathbf{A}^{\text{final}} = \mathbf{A}^{\text{clipped}} - \text{mean}(\mathbf{A}^{\text{clipped}})
+\end{equation}
+
+\textbf{Important}: When noise is annealed to zero ($\sigma = 0$ in late training), clipping is unnecessary:
+\begin{itemize}
+    \item Actor outputs via $\tanh$ are already in $[-1, 1]$
+    \item No noise added $\to$ actions remain in $[-1, 1]$
+    \item Clipping step can be skipped
+    \item Zero-mean correction still applied as safety net (ensures exact zero-mean)
+\end{itemize}
+
+Full procedure:
+\begin{algorithm}
+\caption{Differentiable Zero-Mean with Noise Handling}
+\begin{algorithmic}[1]
+\STATE Forward pass: $\mathbf{A}^{\text{raw}} = \pi_\theta(\mathbf{S})$ \quad ($\in [-1,1]$ from $\tanh$)
+\IF{training mode with noise}
+    \STATE Generate zero-mean noise: $\boldsymbol{\epsilon} \sim \mathcal{N}(0, \sigma^2 I)$, $\boldsymbol{\epsilon} \leftarrow \boldsymbol{\epsilon} - \text{mean}(\boldsymbol{\epsilon})$
+    \STATE Add noise: $\mathbf{A}^{\text{noisy}} = \mathbf{A}^{\text{raw}} + \boldsymbol{\epsilon}$ \quad (may exceed $[-1,1]$)
+    \STATE Clip: $\mathbf{A}^{\text{clipped}} = \text{clip}(\mathbf{A}^{\text{noisy}}, -1, 1)$ \quad (breaks zero-mean!)
+    \STATE Guarantee zero-mean: $\mathbf{A} = \mathbf{A}^{\text{clipped}} - \text{mean}(\mathbf{A}^{\text{clipped}})$
+\ELSE
+    \STATE No clipping needed (already in $[-1,1]$)
+    \STATE Guarantee zero-mean: $\mathbf{A} = \mathbf{A}^{\text{raw}} - \text{mean}(\mathbf{A}^{\text{raw}})$
+\ENDIF
+\STATE Execute $\mathbf{A}$ (guaranteed zero-mean)
+\end{algorithmic}
+\end{algorithm}
 
 \subsection{Per-Tile vs Global Zero-Mean Constraint}
 
@@ -723,26 +768,50 @@ while allowing:
 
 \subsubsection{In Actor Network}
 
-During training (centralized):
+During training with exploration noise:
 \begin{lstlisting}[language=Python]
 # Forward pass for all agents
-actions_raw = actor(obs_batch)  # [batch, 64, 8, 8]
+actions_raw = actor(obs_batch)  # [batch, 64, 8, 8], in [-1, 1] from tanh
 
-# Differentiable zero-mean correction
-global_mean = actions_raw.mean()  # Scalar, differentiable
-actions = actions_raw - global_mean  # [batch, 64, 8, 8]
+# Add zero-mean exploration noise
+if noise_scale > 0:
+    noise = np.random.normal(0, noise_scale, size=actions_raw.shape)
+    noise = noise - noise.mean()  # Ensure noise is zero-mean
+    actions = actions_raw + noise  # May exceed [-1, 1]
+    actions = np.clip(actions, -1, 1)  # Clipping needed
+else:
+    actions = actions_raw  # No clipping needed (already in [-1, 1])
 
-# Actions are now zero-mean AND gradients flow through!
+# CRITICAL: Guarantee exact zero-mean after clipping
+# (clipping can break zero-mean property)
+actions = actions - actions.mean()
+
+# Actions are now:
+# 1. Exactly zero-mean (guaranteed)
+# 2. In [-1, 1] range
+# 3. Gradients flow through correction (differentiable)
 \end{lstlisting}
 
-During inference (decentralized):
+During inference without noise (late training or evaluation):
 \begin{lstlisting}[language=Python]
-# Same correction applied at execution
-actions_raw = actor(obs)
+# Forward pass
+actions_raw = actor(obs)  # In [-1, 1] from tanh
+
+# No noise, no clipping needed
+# Only zero-mean correction for exact guarantee
 global_mean = actions_raw.mean()
 actions = actions_raw - global_mean
-return actions
+
+return actions  # Guaranteed zero-mean, in [-1, 1]
 \end{lstlisting}
+
+\textbf{Key points}:
+\begin{itemize}
+    \item Clipping only required when adding noise ($\sigma > 0$)
+    \item Without noise, $\tanh$ output is naturally in $[-1, 1]$
+    \item Final zero-mean correction always applied (cheap safety net)
+    \item Ensures exact $\text{mean}(\mathbf{A}) = 0$ for solver stability
+\end{itemize}
 
 \subsubsection{In Loss Function}
 
@@ -764,6 +833,8 @@ With these fixes:
     \item \textbf{Proper credit assignment}: Gradients include zero-mean constraint effect
     \item \textbf{Physical validity}: Tiles can have non-zero mean as required by flow physics
     \item \textbf{Training stability}: Network aware of constraint during learning
+    \item \textbf{Exact zero-mean guarantee}: Final correction after clipping ensures $\text{mean}(\mathbf{A}) = 0$ exactly for solver stability
+    \item \textbf{Efficient inference}: When noise is annealed ($\sigma \to 0$), clipping is unnecessary since $\tanh$ output is naturally in $[-1, 1]$
 \end{enumerate}
 
 \begin{table}[h]
