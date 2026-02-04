@@ -311,8 +311,8 @@ def train_maddpg_consistency(
         input_channels=input_channels
     )
 
-    # Initialize replay buffer with previous action tracking
-    replay_buffer = BatchedReplayBuffer(buffer_size, num_agents, agents)
+    # Initialize replay buffer with correct observation channels
+    replay_buffer = BatchedReplayBuffer(buffer_size, num_agents, agents, obs_channels=input_channels)
 
     # Resume from checkpoint if provided
     total_steps = 0

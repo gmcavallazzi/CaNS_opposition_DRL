@@ -795,20 +795,22 @@ class BatchedReplayBuffer:
         self,
         capacity: int,
         n_agents: int,
-        agent_ids: List[str]
+        agent_ids: List[str],
+        obs_channels: int = 2  # NEW: Support 2 or 3 channels
     ):
         self.capacity = capacity
         self.n_agents = n_agents
         self.agent_ids = agent_ids
+        self.obs_channels = obs_channels  # NEW
 
-        # Each agent has 2x8x8=128 obs features and 8x8=64 action values
-        self.obs_dim = 128  # 2 * 8 * 8
+        # Each agent has obs_channels x 8 x 8 obs features and 8x8=64 action values
+        self.obs_dim = obs_channels * 8 * 8  # NEW: Variable based on channels
         self.act_dim = 64   # 8 * 8
 
         # Initialize buffers
-        # Store spatial data directly
-        self.obs_buf = np.zeros((capacity, n_agents, 2, 8, 8), dtype=np.float32)
-        self.next_obs_buf = np.zeros((capacity, n_agents, 2, 8, 8), dtype=np.float32)
+        # Store spatial data directly with variable channels
+        self.obs_buf = np.zeros((capacity, n_agents, obs_channels, 8, 8), dtype=np.float32)  # NEW
+        self.next_obs_buf = np.zeros((capacity, n_agents, obs_channels, 8, 8), dtype=np.float32)  # NEW
         self.acts_buf = np.zeros((capacity, n_agents, 8, 8), dtype=np.float32)
         self.prev_acts_buf = np.zeros((capacity, n_agents, 8, 8), dtype=np.float32)
         self.rews_buf = np.zeros((capacity, n_agents), dtype=np.float32)
@@ -819,11 +821,11 @@ class BatchedReplayBuffer:
 
     def add_batch(
         self,
-        obs_batch: np.ndarray,       # [n_agents, 2, 8, 8]
+        obs_batch: np.ndarray,       # [n_agents, obs_channels, 8, 8]
         acts_batch: np.ndarray,      # [n_agents, 8, 8]
         prev_acts_batch: np.ndarray, # [n_agents, 8, 8]
         rews_batch: np.ndarray,      # [n_agents]
-        next_obs_batch: np.ndarray,  # [n_agents, 2, 8, 8]
+        next_obs_batch: np.ndarray,  # [n_agents, obs_channels, 8, 8]
         dones_batch: np.ndarray      # [n_agents]
     ):
         """Add a batch of transitions to the buffer."""
@@ -868,16 +870,44 @@ class BatchedReplayBuffer:
         )
 
     def load(self, path: str):
-        """Load buffer state from disk."""
+        """Load buffer state from disk with backwards compatibility."""
         data = np.load(path)
 
         # Load data
         load_size = data['size'] if 'size' in data else len(data['obs'])
-        self.obs_buf[:load_size] = data['obs']
-        self.next_obs_buf[:load_size] = data['next_obs']
+
+        # Handle channel mismatch (loading 2-channel data into 3-channel buffer or vice versa)
+        loaded_obs = data['obs']
+        loaded_next_obs = data['next_obs']
+
+        loaded_channels = loaded_obs.shape[2]  # [size, n_agents, channels, 8, 8]
+
+        if loaded_channels != self.obs_channels:
+            print(f"Warning: Buffer channel mismatch. Loaded: {loaded_channels}, Current: {self.obs_channels}")
+
+            if loaded_channels == 2 and self.obs_channels == 3:
+                # Loading old 2-channel data into new 3-channel buffer
+                # Pad with zeros for the prev_action channel
+                print("Padding observations with zero prev_action channel")
+                self.obs_buf[:load_size, :, :2, :, :] = loaded_obs
+                self.obs_buf[:load_size, :, 2:, :, :] = 0.0  # Zero prev_action
+                self.next_obs_buf[:load_size, :, :2, :, :] = loaded_next_obs
+                self.next_obs_buf[:load_size, :, 2:, :, :] = 0.0
+            elif loaded_channels == 3 and self.obs_channels == 2:
+                # Loading 3-channel data into 2-channel buffer (drop prev_action)
+                print("Dropping prev_action channel from loaded observations")
+                self.obs_buf[:load_size] = loaded_obs[:, :, :2, :, :]
+                self.next_obs_buf[:load_size] = loaded_next_obs[:, :, :2, :, :]
+            else:
+                raise ValueError(f"Unsupported channel conversion: {loaded_channels} -> {self.obs_channels}")
+        else:
+            # Same number of channels, direct copy
+            self.obs_buf[:load_size] = loaded_obs
+            self.next_obs_buf[:load_size] = loaded_next_obs
+
         self.acts_buf[:load_size] = data['acts']
 
-        # Handle backward compatibility
+        # Handle backward compatibility for prev_acts
         if 'prev_acts' in data:
             self.prev_acts_buf[:load_size] = data['prev_acts']
         else:
@@ -889,7 +919,7 @@ class BatchedReplayBuffer:
         self.ptr = int(data['ptr']) if 'ptr' in data else load_size % self.capacity
         self.size = min(load_size, self.capacity)
 
-        print(f"Loaded buffer with {self.size} transitions")
+        print(f"Loaded buffer with {self.size} transitions ({self.obs_channels} channels)")
 
     @property
     def full(self) -> bool:
