@@ -46,8 +46,11 @@ class CNNActorWithSimilarity(nn.Module):
     """
     CNN-based actor network with similarity feature extraction branch.
 
-    Each agent observes an 8x8 patch with 2 channels (u, w velocities)
-    and outputs an 8x8 grid of actions.
+    Each agent observes an 8x8 patch with 2 or 3 channels:
+    - 2 channels: [u, w velocities] (backwards compatible)
+    - 3 channels: [u, w, prev_action] (with action memory)
+
+    Outputs an 8x8 grid of actions.
 
     Uses STANDARD padding (not circular) since the 8x8 patch is a local
     window into the larger domain, not a periodic structure itself.
@@ -56,7 +59,7 @@ class CNNActorWithSimilarity(nn.Module):
     similarity consistency loss during training.
     """
     def __init__(self, conv_channels: List[int] = None, dropout_rate: float = 0.05,
-                 similarity_dim: int = 16):
+                 similarity_dim: int = 16, input_channels: int = 2):
         super().__init__()
 
         # Default encoder-decoder architecture
@@ -64,11 +67,12 @@ class CNNActorWithSimilarity(nn.Module):
             conv_channels = [16, 32]  # Encoder channels
 
         self.similarity_dim = similarity_dim
+        self.input_channels = input_channels  # NEW: store for reference
 
         # Encoder: Extract spatial features from input
         # Uses standard padding since patches are NOT periodic
         encoder_layers = []
-        in_channels = 2  # u, w velocities
+        in_channels = input_channels  # NEW: Support 2 or 3 channels
 
         for out_channels in conv_channels:
             encoder_layers.extend([
@@ -120,7 +124,7 @@ class CNNActorWithSimilarity(nn.Module):
         Forward pass.
 
         Args:
-            obs: [batch_size, 2, 8, 8] - velocity observations
+            obs: [batch_size, 2 or 3, 8, 8] - velocity observations (+ prev_action if enabled)
             return_similarity: If True, also return similarity features
 
         Returns:
@@ -156,11 +160,15 @@ class CNNCriticCircular(nn.Module):
     """
     Convolutional critic network with circular padding for periodic domain.
 
-    Processes 64x64 grids with 3 channels (u, w observations + actions).
+    Processes 64x64 grids with 3 or 4 channels:
+    - 3 channels: [u, w, action] (backwards compatible)
+    - 4 channels: [u, w, prev_action, current_action] (with action memory)
+
     Uses circular padding since the full domain is periodic in x and y.
     """
     def __init__(self, conv_channels: List[int] = None,
-                 mlp_layers: List[int] = None, dropout_rate: float = 0.05):
+                 mlp_layers: List[int] = None, dropout_rate: float = 0.05,
+                 input_channels: int = 2):
         super().__init__()
 
         # Default architectures
@@ -169,9 +177,13 @@ class CNNCriticCircular(nn.Module):
         if mlp_layers is None:
             mlp_layers = [256, 128]
 
+        # Store input channels (observations only, action added in forward)
+        self.obs_channels = input_channels  # 2 for [u,w], 3 for [u,w,prev_action]
+
         # Convolutional layers with circular padding for spatial processing
         conv_layers = []
-        in_channels = 3  # 2 for u,w + 1 for actions
+        # Total input: obs_channels + 1 (for current action)
+        in_channels = input_channels + 1  # e.g., 2+1=3 or 3+1=4
 
         for out_channels in conv_channels:
             conv_layers.extend([
@@ -231,14 +243,16 @@ class CNNCriticCircular(nn.Module):
         Forward pass.
 
         Args:
-            obs_fields: [batch_size, 2, 64, 64] - u,w velocity fields
-            act_field: [batch_size, 1, 64, 64] - action field
+            obs_fields: [batch_size, n_obs_channels, 64, 64] - observation fields
+                        n_obs_channels = 2 for [u,w] or 3 for [u,w,prev_action]
+            act_field: [batch_size, 1, 64, 64] - current action field
 
         Returns:
             Q-values: [batch_size, 1]
         """
         # Combine observations and actions
-        x = torch.cat([obs_fields, act_field], dim=1)  # [batch_size, 3, 64, 64]
+        # Results in [batch_size, 3, 64, 64] or [batch_size, 4, 64, 64]
+        x = torch.cat([obs_fields, act_field], dim=1)
 
         # Apply convolutional layers
         x = self.conv_net(x)
@@ -370,7 +384,25 @@ def spatial_smoothness_loss(actions: torch.Tensor) -> torch.Tensor:
 
 def zero_mean_loss(actions: torch.Tensor) -> torch.Tensor:
     """
-    Compute zero-mean penalty: mean(a)^2 per agent.
+    DEPRECATED: Per-agent zero-mean constraint.
+
+    This loss is physically invalid - different flow regions require different
+    average actuation levels. Use global_zero_mean_loss instead.
+
+    Kept for backwards compatibility, but should use lambda_zero: 0.0
+    """
+    # Compute mean per agent (average over the 8x8 grid)
+    mean_per_agent = actions.mean(dim=(2, 3))  # [batch_size, n_agents]
+
+    return torch.mean(mean_per_agent ** 2)
+
+
+def global_zero_mean_loss(actions: torch.Tensor) -> torch.Tensor:
+    """
+    Compute global zero-mean penalty: mean(entire field)^2
+
+    Enforces mass conservation constraint over the entire 64x64 domain,
+    without constraining individual 8x8 tiles to be zero-mean.
 
     Args:
         actions: [batch_size, n_agents, 8, 8]
@@ -378,10 +410,10 @@ def zero_mean_loss(actions: torch.Tensor) -> torch.Tensor:
     Returns:
         Scalar loss value
     """
-    # Compute mean per agent (average over the 8x8 grid)
-    mean_per_agent = actions.mean(dim=(2, 3))  # [batch_size, n_agents]
+    # Global mean: average over all agents and spatial dimensions
+    global_mean = actions.mean(dim=(1, 2, 3))  # [batch_size]
 
-    return torch.mean(mean_per_agent ** 2)
+    return torch.mean(global_mean ** 2)
 
 
 # ============================================================================
@@ -415,7 +447,8 @@ class SharedPolicyMADDPGConsistency:
         gradient_clip: float = 1.0,
         lambda_temporal: float = 0.0,  # Disabled by default
         lambda_spatial: float = 0.5,
-        lambda_zero: float = 0.1,
+        lambda_zero: float = 0.0,  # DEPRECATED: per-agent zero-mean (invalid)
+        lambda_global_mean: float = 0.05,  # NEW: global zero-mean constraint
         # Consistency loss parameters
         consistency_enable: bool = True,
         consistency_lambda: float = 0.1,
@@ -423,7 +456,9 @@ class SharedPolicyMADDPGConsistency:
         consistency_margin: float = 0.1,
         consistency_boundary_only: bool = True,
         consistency_warmup_steps: int = 5000,
-        similarity_dim: int = 16
+        similarity_dim: int = 16,
+        # NEW: Input channels parameter
+        input_channels: int = 2  # 2 for [u,w], 3 for [u,w,prev_action]
     ):
         self.agents = agents
         self.n_agents = len(agents)
@@ -440,7 +475,8 @@ class SharedPolicyMADDPGConsistency:
         # Smoothness penalty weights
         self.lambda_temporal = lambda_temporal
         self.lambda_spatial = lambda_spatial
-        self.lambda_zero = lambda_zero
+        self.lambda_zero = lambda_zero  # Deprecated
+        self.lambda_global_mean = lambda_global_mean  # NEW: global zero-mean
 
         # Consistency loss parameters
         self.consistency_enable = consistency_enable
@@ -450,6 +486,9 @@ class SharedPolicyMADDPGConsistency:
         self.consistency_boundary_only = consistency_boundary_only
         self.consistency_warmup_steps = consistency_warmup_steps
         self.similarity_dim = similarity_dim
+
+        # NEW: Store input channels
+        self.input_channels = input_channels
 
         # Training step counter for warmup
         self.training_step = 0
@@ -464,20 +503,22 @@ class SharedPolicyMADDPGConsistency:
 
         print(f"Initializing MADDPG with Consistency Loss:")
         print(f"  Number of agents: {self.n_agents}")
+        print(f"  Input channels: {input_channels} ({'[u,w,prev_action]' if input_channels == 3 else '[u,w]'})")
         print(f"  Actor channels: {actor_channels}")
         print(f"  Critic conv channels: {critic_conv_channels}")
         print(f"  Critic MLP layers: {critic_mlp_layers}")
-        print(f"  Smoothness penalties - temporal: {lambda_temporal}, spatial: {lambda_spatial}, zero-mean: {lambda_zero}")
+        print(f"  Smoothness penalties - temporal: {lambda_temporal}, spatial: {lambda_spatial}")
+        print(f"  Zero-mean - per-agent (deprecated): {lambda_zero}, global: {lambda_global_mean}")
         print(f"  Consistency loss - enabled: {consistency_enable}, lambda: {consistency_lambda}")
         print(f"  Consistency params - tau: {consistency_tau}, margin: {consistency_margin}, boundary_only: {consistency_boundary_only}")
 
         # Create networks with new architecture
-        self.actor = CNNActorWithSimilarity(actor_channels, dropout_rate, similarity_dim).to(device)
-        self.actor_target = CNNActorWithSimilarity(actor_channels, dropout_rate, similarity_dim).to(device)
+        self.actor = CNNActorWithSimilarity(actor_channels, dropout_rate, similarity_dim, input_channels).to(device)
+        self.actor_target = CNNActorWithSimilarity(actor_channels, dropout_rate, similarity_dim, input_channels).to(device)
 
-        # Critic with circular padding
-        self.critic = CNNCriticCircular(critic_conv_channels, critic_mlp_layers, dropout_rate).to(device)
-        self.critic_target = CNNCriticCircular(critic_conv_channels, critic_mlp_layers, dropout_rate).to(device)
+        # Critic with circular padding (receives observations + current action)
+        self.critic = CNNCriticCircular(critic_conv_channels, critic_mlp_layers, dropout_rate, input_channels).to(device)
+        self.critic_target = CNNCriticCircular(critic_conv_channels, critic_mlp_layers, dropout_rate, input_channels).to(device)
 
         # Initialize target networks
         self.actor_target.load_state_dict(self.actor.state_dict())
@@ -489,20 +530,25 @@ class SharedPolicyMADDPGConsistency:
 
     def select_actions_batched(self, all_obs: torch.Tensor) -> np.ndarray:
         """
-        Select actions for all agents in a batched forward pass.
+        Select actions for all agents in a batched forward pass with
+        differentiable zero-mean correction.
 
         Args:
-            all_obs: [n_agents, 2, 8, 8] - observations for all agents
+            all_obs: [n_agents, input_channels, 8, 8] - observations for all agents
 
         Returns:
-            all_actions: [n_agents, 8, 8] - actions for all agents
+            all_actions: [n_agents, 8, 8] - zero-mean corrected actions
         """
         with torch.no_grad():
-            # CNN expects [Batch*N_Agents, 2, 8, 8]
-            # all_obs is [N_Agents, 2, 8, 8] which works as a batch of 64
-            all_actions = self.actor(all_obs, return_similarity=False)
-            if isinstance(all_actions, tuple):
-                all_actions = all_actions[0]
+            # Forward pass for all agents
+            all_actions_raw = self.actor(all_obs, return_similarity=False)
+            if isinstance(all_actions_raw, tuple):
+                all_actions_raw = all_actions_raw[0]
+
+            # Apply zero-mean correction (same as in training)
+            global_mean = all_actions_raw.mean()
+            all_actions = all_actions_raw - global_mean
+
             return all_actions.cpu().numpy()
 
     def update_batched(self, batch: Dict[str, torch.Tensor]) -> Tuple[float, float, Dict[str, float]]:
@@ -529,14 +575,19 @@ class SharedPolicyMADDPGConsistency:
         # ========================================================================
 
         with torch.no_grad():
-            # Reshape for actor: [batch_size * n_agents, 2, 8, 8]
-            next_obs_flat = next_obs_batch.view(batch_size * self.n_agents, 2, 8, 8)
+            # Reshape for actor: [batch_size * n_agents, input_channels, 8, 8]
+            next_obs_flat = next_obs_batch.view(batch_size * self.n_agents, self.input_channels, 8, 8)
 
             # Get next actions from target actor
             next_actions_flat = self.actor_target(next_obs_flat, return_similarity=False)
             if isinstance(next_actions_flat, tuple):
                 next_actions_flat = next_actions_flat[0]
-            next_actions = next_actions_flat.view(batch_size, self.n_agents, 8, 8)
+            next_actions_raw = next_actions_flat.view(batch_size, self.n_agents, 8, 8)
+
+            # Apply zero-mean correction to target actions too
+            next_global_means = next_actions_raw.view(batch_size, -1).mean(dim=1, keepdim=True)
+            next_global_means = next_global_means.view(batch_size, 1, 1, 1)
+            next_actions = next_actions_raw - next_global_means
 
             # Prepare spatial data for critic
             next_obs_fields, next_act_field = self._prepare_spatial_data(
@@ -571,14 +622,21 @@ class SharedPolicyMADDPGConsistency:
         # ========================================================================
 
         # Reshape observations for actor
-        obs_flat = obs_batch.view(batch_size * self.n_agents, 2, 8, 8)
+        obs_flat = obs_batch.view(batch_size * self.n_agents, self.input_channels, 8, 8)
 
         # Get actions and similarity features from current policy
         actions_flat, sim_features_flat = self.actor(obs_flat, return_similarity=True)
-        actions = actions_flat.view(batch_size, self.n_agents, 8, 8)
+        actions_raw = actions_flat.view(batch_size, self.n_agents, 8, 8)
         sim_features = sim_features_flat.view(batch_size, self.n_agents, self.similarity_dim)
 
-        # Prepare spatial data for critic
+        # CRITICAL: Apply differentiable zero-mean correction
+        # This makes the network aware of the constraint and prevents
+        # varying global corrections from causing bang-bang oscillations
+        global_means = actions_raw.view(batch_size, -1).mean(dim=1, keepdim=True)  # [batch, 1]
+        global_means = global_means.view(batch_size, 1, 1, 1)  # Broadcast shape
+        actions = actions_raw - global_means  # Zero-mean corrected, gradients flow through!
+
+        # Prepare spatial data for critic (with corrected actions)
         obs_fields_new, act_field_new = self._prepare_spatial_data(obs_batch, actions)
 
         # Base actor loss: maximize Q-value
@@ -592,8 +650,13 @@ class SharedPolicyMADDPGConsistency:
         # Spatial smoothness penalty
         spatial_loss = spatial_smoothness_loss(actions)
 
-        # Zero-mean penalty
-        zero_loss = zero_mean_loss(actions)
+        # DEPRECATED: Per-agent zero-mean penalty (kept for backwards compatibility)
+        zero_loss = torch.tensor(0.0, device=self.device)
+        if self.lambda_zero > 0:
+            zero_loss = zero_mean_loss(actions)
+
+        # NEW: Global zero-mean penalty (physically valid)
+        global_mean_loss = global_zero_mean_loss(actions)
 
         # Consistency loss (with warmup)
         consistency_loss = torch.tensor(0.0, device=self.device)
@@ -610,7 +673,8 @@ class SharedPolicyMADDPGConsistency:
         actor_loss = (q_loss +
                      self.lambda_temporal * temporal_loss +
                      self.lambda_spatial * spatial_loss +
-                     self.lambda_zero * zero_loss +
+                     self.lambda_zero * zero_loss +  # Deprecated, usually 0
+                     self.lambda_global_mean * global_mean_loss +  # NEW
                      self.consistency_lambda * consistency_loss)
 
         # Update actor
@@ -628,7 +692,8 @@ class SharedPolicyMADDPGConsistency:
             'q_loss': q_loss.item(),
             'temporal_loss': temporal_loss.item() if isinstance(temporal_loss, torch.Tensor) else temporal_loss,
             'spatial_loss': spatial_loss.item(),
-            'zero_loss': zero_loss.item(),
+            'zero_loss': zero_loss.item() if isinstance(zero_loss, torch.Tensor) else zero_loss,
+            'global_mean_loss': global_mean_loss.item(),  # NEW
             'consistency_loss': consistency_loss.item() if isinstance(consistency_loss, torch.Tensor) else consistency_loss
         }
 
@@ -643,40 +708,46 @@ class SharedPolicyMADDPGConsistency:
         Convert patch-based data to full spatial fields for critic.
 
         Args:
-            obs_batch: [batch_size, n_agents, 2, 8, 8] - observations
+            obs_batch: [batch_size, n_agents, n_channels, 8, 8] - observations
+                       n_channels = 2 for [u,w] or 3 for [u,w,prev_action]
             act_batch: [batch_size, n_agents, 8, 8] - actions
 
         Returns:
-            obs_fields: [batch_size, 2, 64, 64] - full velocity fields
+            obs_fields: [batch_size, n_channels, 64, 64] - full observation fields
             act_field: [batch_size, 1, 64, 64] - full action field
         """
         batch_size = obs_batch.size(0)
+        n_channels = obs_batch.size(2)  # Auto-detect: 2 or 3
 
         # Reconstruct full 64x64 fields from 8x8 patches
         # Agents are arranged in 8x8 grid
-        obs_fields_u = torch.zeros(batch_size, 64, 64, device=obs_batch.device)
-        obs_fields_w = torch.zeros(batch_size, 64, 64, device=obs_batch.device)
+
+        # Create fields for each observation channel (u, w, and optionally prev_action)
+        obs_fields_list = [torch.zeros(batch_size, 64, 64, device=obs_batch.device)
+                          for _ in range(n_channels)]
         act_fields = torch.zeros(batch_size, 64, 64, device=act_batch.device)
 
         agent_idx = 0
         for i in range(8):  # 8 patches in x
             for j in range(8):  # 8 patches in y
                 # Extract patch from agent
-                obs_patch = obs_batch[:, agent_idx, :, :, :]  # [batch, 2, 8, 8]
+                obs_patch = obs_batch[:, agent_idx, :, :, :]  # [batch, n_channels, 8, 8]
                 act_patch = act_batch[:, agent_idx, :, :]     # [batch, 8, 8]
 
                 # Place in full field
                 x_start, x_end = i * 8, (i + 1) * 8
                 y_start, y_end = j * 8, (j + 1) * 8
 
-                obs_fields_u[:, x_start:x_end, y_start:y_end] = obs_patch[:, 0, :, :]
-                obs_fields_w[:, x_start:x_end, y_start:y_end] = obs_patch[:, 1, :, :]
+                # Place each observation channel
+                for ch in range(n_channels):
+                    obs_fields_list[ch][:, x_start:x_end, y_start:y_end] = obs_patch[:, ch, :, :]
+
                 act_fields[:, x_start:x_end, y_start:y_end] = act_patch
 
                 agent_idx += 1
 
-        # Stack observation fields
-        obs_fields = torch.stack([obs_fields_u, obs_fields_w], dim=1)  # [batch, 2, 64, 64]
+        # Stack observation fields: [batch, n_channels, 64, 64]
+        obs_fields = torch.stack(obs_fields_list, dim=1)
         act_field = act_fields.unsqueeze(1)  # [batch, 1, 64, 64]
 
         return obs_fields, act_field

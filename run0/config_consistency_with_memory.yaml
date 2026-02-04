@@ -1,9 +1,14 @@
-# Configuration for MADDPG with Observation-Similarity Consistency Loss
-# This config is tuned for smooth multi-agent control with reduced patch boundary discontinuities
+# Configuration for MADDPG with Observation-Similarity Consistency Loss + Action Memory
+# This config adds previous action to observations for smooth temporal control
 
 # General parameters
 total_timesteps: 1800000  # Total training steps
 maxprocs: [64]  # Number of MPI processes for CaNS
+
+# NEW: Observation parameters
+observation:
+  include_prev_action: true   # Add previous action as 3rd observation channel
+  prev_action_scale: 1.0      # Scale factor for prev_action channel (default: 1.0)
 
 # Network architecture for CNN-based agents
 net_arch:
@@ -52,8 +57,9 @@ model:
   smoothness:
     # IMPORTANT: lambda_temporal is set to 0 because comparing current actions
     # to replay buffer actions from OLD policy creates confusing gradients
-    # and slows policy improvement. Observation-consistency handles coordination.
-    lambda_temporal: 0.0     # Disabled - causes confusion with old policy actions
+    # and slows policy improvement. With prev_action in obs, policy learns
+    # smoothness naturally without needing temporal loss.
+    lambda_temporal: 0.0     # Disabled - policy has prev_action context now
     lambda_spatial: 0.5      # Keep: within-patch smoothness (finite differences)
     lambda_zero: 0.0         # DEPRECATED: per-agent zero-mean (physically invalid)
     lambda_global_mean: 0.05 # NEW: global zero-mean constraint (mass conservation)
@@ -105,17 +111,27 @@ training:
 # HYPERPARAMETER TUNING GUIDE
 # ==============================================================================
 #
+# WITH PREV_ACTION IN OBSERVATIONS:
+#   - Policy can see what it just did → learns smooth control naturally
+#   - Temporal loss no longer needed (lambda_temporal: 0.0)
+#   - State is Markovian: (u, w, prev_action) contains all info
+#   - Expected behavior: smooth control emerges during training
+#
 # IF POLICY BECOMES TOO STIFF (drag reduction drops, actions too uniform):
 #   - Decrease consistency.lambda: 0.1 -> 0.01
 #   - Increase consistency.tau_similarity: 0.9 -> 0.95 (fewer pairs considered)
 #   - Increase consistency.margin: 0.1 -> 0.2 (more tolerance)
+#   - Decrease prev_action_scale: 1.0 -> 0.5 (reduce prev_action influence)
 #
 # IF POLICY IS STILL TOO AGGRESSIVE (sharp boundaries remain):
 #   - Increase consistency.lambda: 0.1 -> 0.5
 #   - Decrease consistency.tau_similarity: 0.9 -> 0.85 (more pairs considered)
 #   - Decrease consistency.margin: 0.1 -> 0.05 (less tolerance)
+#   - Increase prev_action_scale: 1.0 -> 1.5 (amplify prev_action signal)
 #
 # RECOMMENDED STARTING POINT (current config):
+#   - observation.include_prev_action: true
+#   - observation.prev_action_scale: 1.0
 #   - lambda_temporal: 0.0 (disabled)
 #   - lambda_spatial: 0.5
 #   - lambda_zero: 0.1

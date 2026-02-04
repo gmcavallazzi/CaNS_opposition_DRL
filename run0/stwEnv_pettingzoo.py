@@ -48,6 +48,13 @@ class STWParallelEnv(ParallelEnv):
         self.om_max = self.config['action']['om_max']
         self.action_scaling_factor = self.config['action']['scaling_factor']
 
+        # NEW: Check if prev_action should be included in observations
+        self.include_prev_action_in_obs = config.get('observation', {}).get('include_prev_action', False)
+        self.prev_action_scale = config.get('observation', {}).get('prev_action_scale', 1.0)
+
+        # Initialize prev_action field (always track, even if not in obs)
+        self.prev_action_field = np.zeros((64, 64), dtype=np.float32)
+
         # Setup observation and action spaces
         self._setup_spaces()
 
@@ -82,13 +89,15 @@ class STWParallelEnv(ParallelEnv):
 
     def _setup_spaces(self):
         """Set up the observation and action spaces for patch-based agents."""
-        # Observation space: each agent sees 8x8 patch with 2 velocity channels
-        # Shape: (2, 8, 8) - channel-first format for CNN
+        # Observation space: each agent sees 8x8 patch with 2 or 3 channels
+        # If include_prev_action_in_obs: (3, 8, 8) - [u, w, prev_action]
+        # Otherwise: (2, 8, 8) - [u, w] (backwards compatible)
+        n_channels = 3 if self.include_prev_action_in_obs else 2
         self.observation_spaces = {
             agent: spaces.Box(
                 low=-np.inf,
                 high=np.inf,
-                shape=(2, 8, 8),  # (channels, height, width)
+                shape=(n_channels, 8, 8),  # (channels, height, width)
                 dtype=np.float32
             ) for agent in self.possible_agents
         }
@@ -127,6 +136,9 @@ class STWParallelEnv(ParallelEnv):
         """Reset the environment to initial state."""
         print("Python: reset() called")
         self.current_step = 0
+
+        # NEW: Reset prev_action_field to zero
+        self.prev_action_field = np.zeros((64, 64), dtype=np.float32)
 
         # Reset agent list
         self.agents = self.possible_agents[:]
@@ -174,9 +186,12 @@ class STWParallelEnv(ParallelEnv):
         # Reconstruct full 64x64 action matrix from patch-based actions
         action_matrix = self._reconstruct_action_field(actions)
 
-        # Apply global zero-mean constraint (mass conservation)
-        action_mean = np.mean(action_matrix)
-        action_matrix = action_matrix - action_mean
+        # NOTE: Zero-mean constraint is now applied in the training script BEFORE
+        # actions are sent here, to ensure gradient flow and exact zero-mean guarantee.
+        # The actions received here should already be exactly zero-mean.
+
+        # Update prev_action_field for next step (store exactly what gets executed)
+        self.prev_action_field = action_matrix.copy()
 
         self.last_action = actions
 
@@ -304,7 +319,8 @@ class STWParallelEnv(ParallelEnv):
             i, j: Agent indices in 8x8 agent grid
 
         Returns:
-            obs: (2, 8, 8) observation array in channel-first format
+            obs: (2, 8, 8) or (3, 8, 8) observation array in channel-first format
+                 Channels: [u, w] or [u, w, prev_action]
         """
         # Calculate patch boundaries
         x_start = i * self.patch_size
@@ -316,8 +332,19 @@ class STWParallelEnv(ParallelEnv):
         u_patch = u_obs_field[x_start:x_end, y_start:y_end] * self.om_max
         w_patch = w_obs_field[x_start:x_end, y_start:y_end] * self.om_max
 
-        # Stack as (channels, height, width)
-        obs = np.stack([u_patch, w_patch], axis=0).astype(np.float32)
+        # NEW: Conditional inclusion of prev_action
+        if self.include_prev_action_in_obs:
+            # Extract previous action patch
+            prev_action_patch = self.prev_action_field[x_start:x_end, y_start:y_end]
+            # Stack as 3-channel [u, w, prev_action]
+            obs = np.stack([
+                u_patch,
+                w_patch,
+                self.prev_action_scale * prev_action_patch
+            ], axis=0).astype(np.float32)
+        else:
+            # Original 2-channel [u, w] - backwards compatible
+            obs = np.stack([u_patch, w_patch], axis=0).astype(np.float32)
 
         return obs
 

@@ -1,0 +1,828 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{cleveref}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{geometry}
+\geometry{margin=1in}
+
+% Custom commands
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\argmax}{\operatorname{argmax}}
+\newcommand{\norm}[1]{\left\|#1\right\|}
+
+% Theorem environments
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}
+\newtheorem{proposition}{Proposition}
+\newtheorem{remark}{Remark}
+
+\title{Action Memory in Multi-Agent Reinforcement Learning:\\Preventing Bang-Bang Control Through State Augmentation}
+
+\author{Implementation Report\\CaNS Opposition Control with Deep Reinforcement Learning}
+
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+This report presents the implementation of action memory in multi-agent deep reinforcement learning for turbulent flow control. We address the bang-bang control problem---characterized by high-frequency oscillations in control actions---through state augmentation with previous action information. We provide a rigorous mathematical formulation, explain the mechanism by which this prevents bang-bang behavior, and address the apparent redundancy in critic inputs. The implementation maintains full backwards compatibility while enabling smooth, adaptive temporal control.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+\section{Introduction}
+
+\subsection{Problem Statement}
+
+In multi-agent reinforcement learning for flow control, we observed undesirable bang-bang behavior: the policy exhibits high-frequency oscillations, rapidly switching between extreme action values (e.g., from $+1$ to $-1$). This behavior manifests as:
+
+\begin{enumerate}
+    \item High temporal gradient: $\norm{\nabla_t a}_{\text{RMS}} \approx 0.4$
+    \item Excessive high-frequency content in FFT spectrum
+    \item Suboptimal flow control due to actuator limitations and flow inertia
+\end{enumerate}
+
+\subsection{Root Cause Analysis}
+
+\textbf{Paradox}: Bang-bang control achieves high drag reduction, yet is undesirable. Why?
+
+The bang-bang behavior creates a \textbf{closed-loop feedback instability}:
+
+\begin{enumerate}
+    \item \textbf{Wave excitation}: Bang-bang actuation triggers high-frequency wave dynamics in the turbulent flow
+    \item \textbf{Observation coupling}: These waves appear in velocity measurements $(\mathbf{u}, \mathbf{w})$
+    \item \textbf{Reactive policy}: Policy $\pi(\mathbf{u}, \mathbf{w})$ responds to oscillating observations with oscillating actions
+    \item \textbf{Feedback loop}: Actions reinforce wave dynamics, creating self-sustaining oscillations
+    \item \textbf{Memory-less amplification}: Without action history, policy cannot detect or break this cycle
+\end{enumerate}
+
+The problem is NOT poor performance---drag reduction may be excellent. The issues are:
+\begin{itemize}
+    \item Actuators cannot physically achieve high-frequency switching
+    \item May exploit numerical artifacts specific to the simulation
+    \item Poor robustness to model mismatch or real-world conditions
+    \item Unsustainable feedback dynamics
+\end{itemize}
+
+Mathematically, at time $t$ the policy receives state $\mathbf{s}_t = [\mathbf{u}_t, \mathbf{w}_t]$ and outputs action $\mathbf{a}_t = \pi(\mathbf{s}_t)$. At time $t+1$, it has no information about $\mathbf{a}_t$, so it cannot detect the oscillation pattern and learn to dampen it.
+
+\subsection{Proposed Solution}
+
+We augment the state representation to include the previous action:
+\begin{equation}
+    \mathbf{s}_t = [\mathbf{u}_t, \mathbf{w}_t, \mathbf{a}_{t-1}]
+\end{equation}
+
+This simple modification enables the policy to learn temporal smoothness adaptively while maintaining the Markov property.
+
+\section{Mathematical Formulation}
+
+\subsection{Standard MDP Without Action Memory}
+
+The original formulation uses a Markov Decision Process (MDP) $\mathcal{M} = (\mathcal{S}, \mathcal{A}, P, R, \gamma)$ where:
+
+\begin{align}
+    \mathcal{S} &= \R^{2 \times 8 \times 8} \quad \text{(state space: velocity fields)} \\
+    \mathcal{A} &= [-1, 1]^{8 \times 8} \quad \text{(action space: control field)} \\
+    P(\mathbf{s}_{t+1} | \mathbf{s}_t, \mathbf{a}_t) &: \mathcal{S} \times \mathcal{A} \to \mathcal{S} \quad \text{(dynamics)} \\
+    R(\mathbf{s}_t, \mathbf{a}_t) &: \mathcal{S} \times \mathcal{A} \to \R \quad \text{(reward)}
+\end{align}
+
+State representation for each agent $i$ at patch $(m,n)$:
+\begin{equation}
+    \mathbf{s}_t^{(i)} = \begin{bmatrix}
+        \mathbf{u}_t^{(i)} \\
+        \mathbf{w}_t^{(i)}
+    \end{bmatrix} \in \R^{2 \times 8 \times 8}
+\end{equation}
+
+The policy network learns:
+\begin{equation}
+    \mathbf{a}_t^{(i)} = \pi_\theta(\mathbf{s}_t^{(i)}) = \pi_\theta(\mathbf{u}_t^{(i)}, \mathbf{w}_t^{(i)})
+\end{equation}
+
+\textbf{Issue}: This is memoryless. The policy at time $t+1$ has no knowledge of $\mathbf{a}_t^{(i)}$.
+
+\subsection{MDP With Action Memory}
+
+We augment the state space to include previous action:
+\begin{equation}
+    \mathcal{S}_{\text{aug}} = \R^{3 \times 8 \times 8} \quad \text{(augmented state space)}
+\end{equation}
+
+Augmented state representation:
+\begin{equation}
+    \mathbf{s}_t^{(i)} = \begin{bmatrix}
+        \mathbf{u}_t^{(i)} \\
+        \mathbf{w}_t^{(i)} \\
+        \mathbf{a}_{t-1}^{(i)}
+    \end{bmatrix} \in \R^{3 \times 8 \times 8}
+\end{equation}
+
+The transition dynamics become:
+\begin{equation}
+    P(\mathbf{s}_{t+1} | \mathbf{s}_t, \mathbf{a}_t) = P([\mathbf{u}_{t+1}, \mathbf{w}_{t+1}, \mathbf{a}_t] | [\mathbf{u}_t, \mathbf{w}_t, \mathbf{a}_{t-1}], \mathbf{a}_t)
+\end{equation}
+
+\begin{proposition}[Markov Property Preservation]
+The augmented state representation $\mathbf{s}_t = [\mathbf{u}_t, \mathbf{w}_t, \mathbf{a}_{t-1}]$ preserves the Markov property:
+\begin{equation}
+    P(\mathbf{s}_{t+1} | \mathbf{s}_t, \mathbf{a}_t) = P(\mathbf{s}_{t+1} | \mathbf{s}_0, \mathbf{a}_0, \ldots, \mathbf{s}_t, \mathbf{a}_t)
+\end{equation}
+\end{proposition}
+
+\begin{proof}
+The next state depends only on current flow state $(\mathbf{u}_t, \mathbf{w}_t)$ and current action $\mathbf{a}_t$ through the Navier-Stokes equations. The augmented state includes $\mathbf{a}_{t-1}$, which becomes part of the next state representation. Since:
+\begin{equation}
+    \mathbf{s}_{t+1} = [\mathbf{u}_{t+1}, \mathbf{w}_{t+1}, \mathbf{a}_t]
+\end{equation}
+and $\mathbf{a}_t$ is determined by the current policy action, the Markov property holds.
+\end{proof}
+
+\subsection{Policy and Value Functions}
+
+The policy network with action memory:
+\begin{equation}
+    \pi_\theta: \R^{3 \times 8 \times 8} \to [-1,1]^{8 \times 8}, \quad \mathbf{a}_t = \pi_\theta(\mathbf{u}_t, \mathbf{w}_t, \mathbf{a}_{t-1})
+\end{equation}
+
+The state-action value function (Q-function):
+\begin{equation}
+    Q^\pi(\mathbf{s}_t, \mathbf{a}_t) = \E_{\tau \sim \pi}\left[\sum_{k=0}^\infty \gamma^k r_{t+k} \Big| \mathbf{s}_t = [\mathbf{u}_t, \mathbf{w}_t, \mathbf{a}_{t-1}], \mathbf{a}_t \right]
+\end{equation}
+
+Bellman equation with action memory:
+\begin{equation}
+    Q(\mathbf{s}_t, \mathbf{a}_t) = r_t + \gamma \E_{\mathbf{s}_{t+1}, \mathbf{a}_{t+1}}\left[Q(\mathbf{s}_{t+1}, \mathbf{a}_{t+1})\right]
+\end{equation}
+
+Expanding:
+\begin{equation}
+    Q([\mathbf{u}_t, \mathbf{w}_t, \mathbf{a}_{t-1}], \mathbf{a}_t) = r_t + \gamma \E\left[Q([\mathbf{u}_{t+1}, \mathbf{w}_{t+1}, \mathbf{a}_t], \mathbf{a}_{t+1})\right]
+\end{equation}
+
+\textbf{Key observation}: The next state $\mathbf{s}_{t+1}$ includes the current action $\mathbf{a}_t$. This creates a temporal coupling.
+
+\section{Mechanism: How Action Memory Prevents Bang-Bang}
+
+\subsection{Temporal Coupling in Value Function}
+
+\begin{proposition}[Temporal Coupling]
+With action memory, the current action choice $\mathbf{a}_t$ directly affects the future state representation, creating an incentive for temporal consistency.
+\end{proposition}
+
+\begin{proof}
+Consider two scenarios at time $t$ with identical flow states but different action histories:
+\begin{align}
+    \text{Scenario A:} \quad &\mathbf{s}_t^A = [\mathbf{u}_t, \mathbf{w}_t, +0.9] \\
+    \text{Scenario B:} \quad &\mathbf{s}_t^B = [\mathbf{u}_t, \mathbf{w}_t, -0.7]
+\end{align}
+
+For a given current action $\mathbf{a}_t$, the next states differ:
+\begin{align}
+    \mathbf{s}_{t+1}^A &= [\mathbf{u}_{t+1}, \mathbf{w}_{t+1}, \mathbf{a}_t] \quad \text{if starting from A} \\
+    \mathbf{s}_{t+1}^B &= [\mathbf{u}_{t+1}, \mathbf{w}_{t+1}, \mathbf{a}_t] \quad \text{if starting from B}
+\end{align}
+
+While the flow evolution $(\mathbf{u}_{t+1}, \mathbf{w}_{t+1})$ is identical, the Q-values differ:
+\begin{equation}
+    Q(\mathbf{s}_t^A, \mathbf{a}_t) \neq Q(\mathbf{s}_t^B, \mathbf{a}_t) \quad \text{in general}
+\end{equation}
+
+The Q-function learns to prefer actions that maintain consistency with $\mathbf{a}_{t-1}$ when beneficial.
+\end{proof}
+
+\subsection{Learning Smooth Control}
+
+The policy learns smoothness through three mechanisms:
+
+\subsubsection{Mechanism 1: Breaking Closed-Loop Feedback Instability}
+
+\textbf{Critical observation}: Bang-bang control actually achieves \emph{high} drag reduction, not poor performance. The problem is more subtle:
+
+\begin{enumerate}
+    \item Bang-bang actuation triggers high-frequency wave dynamics in the flow
+    \item These waves appear in velocity observations $(\mathbf{u}, \mathbf{w})$
+    \item Policy sees oscillating observations $\to$ responds with bang-bang actions
+    \item Actions reinforce wave dynamics $\to$ \textbf{closed-loop feedback instability}
+\end{enumerate}
+
+Mathematically, without action memory:
+\begin{align}
+    \text{Bang-bang } \mathbf{a}_t &\to \text{Wave dynamics in flow} \\
+    \text{Waves in } (\mathbf{u}_{t+1}, \mathbf{w}_{t+1}) &\to \pi(\mathbf{u}_{t+1}, \mathbf{w}_{t+1}) = \text{Bang-bang } \mathbf{a}_{t+1} \\
+    &\to \text{Self-reinforcing cycle}
+\end{align}
+
+The reward signal may actually favor bang-bang:
+\begin{equation}
+    \E[R_{\text{bang-bang}}] \geq \E[R_{\text{smooth}}] \quad \text{(bang-bang works well for drag!)}
+\end{equation}
+
+\textbf{However}, bang-bang is undesirable because:
+\begin{enumerate}
+    \item Not physically realizable (actuator bandwidth limitations)
+    \item May exploit numerical artifacts or simulation resonances
+    \item Poor robustness and generalization to real systems
+    \item Creates unstable feedback loop with flow dynamics
+\end{enumerate}
+
+\textbf{With action memory}, the policy can detect and break this cycle:
+\begin{equation}
+    \pi(\mathbf{u}_t, \mathbf{w}_t, \mathbf{a}_{t-1}) \text{ learns: ``I'm oscillating } \to \text{ dampen the response''}
+\end{equation}
+
+The policy sees the full feedback loop and can learn to stabilize it, trading some drag reduction for smoother, more robust control.
+
+\subsubsection{Mechanism 2: Smoothness Loss Regularization}
+
+The actor loss includes spatial and consistency penalties:
+\begin{equation}
+    \mathcal{L}_{\text{actor}} = -\E_{\mathbf{s},\mathbf{a} \sim \pi}[Q(\mathbf{s}, \mathbf{a})] + \lambda_s \mathcal{L}_{\text{spatial}} + \lambda_c \mathcal{L}_{\text{consistency}}
+\end{equation}
+
+where:
+\begin{align}
+    \mathcal{L}_{\text{spatial}} &= \E\left[\norm{\nabla_x \mathbf{a}}^2 + \norm{\nabla_y \mathbf{a}}^2\right] \\
+    \mathcal{L}_{\text{consistency}} &= \E\left[\sum_{\substack{i,j : \\\text{sim}(\phi_i, \phi_j) > \tau}} \max(0, \norm{\mathbf{a}_i - \mathbf{a}_j} - m)\right]
+\end{align}
+
+With action memory, these losses become more effective because the policy can plan ahead:
+\begin{equation}
+    \pi_\theta(\mathbf{u}_t, \mathbf{w}_t, \mathbf{a}_{t-1}) \text{ learns: ``Choose } \mathbf{a}_t \approx \mathbf{a}_{t-1} \text{ to minimize future smoothness loss''}
+\end{equation}
+
+\subsubsection{Mechanism 3: Value Function Smoothness}
+
+The Q-function learns to be smooth in the action-history dimension:
+\begin{equation}
+    \frac{\partial Q([\mathbf{u}, \mathbf{w}, \mathbf{a}_{\text{prev}}], \mathbf{a}_{\text{curr}})}{\partial \mathbf{a}_{\text{curr}}} \text{ becomes coupled with } \mathbf{a}_{\text{prev}}
+\end{equation}
+
+This creates an implicit preference for:
+\begin{equation}
+    \mathbf{a}_{\text{curr}} \approx \mathbf{a}_{\text{prev}} \quad \text{when flow state is similar}
+\end{equation}
+
+\subsection{Closed-Loop Feedback Dynamics}
+
+\begin{remark}[Bang-Bang as Closed-Loop Instability]
+The bang-bang behavior can be modeled as a feedback system:
+\begin{align}
+    \text{Flow dynamics:} \quad &\mathbf{u}_{t+1} = f_{\text{NS}}(\mathbf{u}_t, \mathbf{a}_t) \\
+    \text{Policy:} \quad &\mathbf{a}_t = \pi(\mathbf{u}_t) \\
+    \text{Closed loop:} \quad &\mathbf{u}_{t+1} = f_{\text{NS}}(\mathbf{u}_t, \pi(\mathbf{u}_t))
+\end{align}
+
+Without action memory, if $\pi$ is highly reactive and flow dynamics $f_{\text{NS}}$ have resonances at certain frequencies, the closed loop can become unstable:
+\begin{equation}
+    \frac{\partial \pi}{\partial \mathbf{u}} \cdot \frac{\partial f_{\text{NS}}}{\partial \mathbf{a}} > 1 \quad \to \quad \text{Oscillatory instability}
+\end{equation}
+
+With action memory, the policy becomes:
+\begin{equation}
+    \mathbf{a}_t = \pi(\mathbf{u}_t, \mathbf{a}_{t-1})
+\end{equation}
+
+This adds \textbf{feedback damping}. The policy can learn:
+\begin{equation}
+    \frac{\partial \pi}{\partial \mathbf{a}_{t-1}} < 0 \quad \text{when } |\mathbf{a}_{t-1}| \text{ is large}
+\end{equation}
+
+effectively implementing a learned stabilizer that prevents runaway oscillations.
+\end{remark}
+
+\subsection{Adaptive Filtering vs Fixed Filtering}
+
+\begin{remark}[Comparison with External Filtering]
+External low-pass filtering applies a fixed rule:
+\begin{equation}
+    \mathbf{a}_t^{\text{filtered}} = \alpha \mathbf{a}_t^{\text{raw}} + (1-\alpha) \mathbf{a}_{t-1}^{\text{filtered}}
+\end{equation}
+
+This has two problems:
+\begin{enumerate}
+    \item Fixed $\alpha$ may be suboptimal (too smooth or too reactive)
+    \item Credit assignment is broken: reward depends on $\mathbf{a}_t^{\text{filtered}}$ but policy outputs $\mathbf{a}_t^{\text{raw}}$
+\end{enumerate}
+
+With action memory, the policy learns adaptive filtering:
+\begin{equation}
+    \mathbf{a}_t = \pi_\theta(\mathbf{u}_t, \mathbf{w}_t, \mathbf{a}_{t-1}) = f_{\text{base}}(\mathbf{u}_t, \mathbf{w}_t) + \alpha_{\text{learned}}(\mathbf{u}_t, \mathbf{w}_t) \cdot \mathbf{a}_{t-1}
+\end{equation}
+
+where $\alpha_{\text{learned}}$ is adaptive and learned through experience.
+\end{remark}
+
+\section{Critic Architecture and Apparent Redundancy}
+
+\subsection{Critic Input Composition}
+
+The critic network receives:
+\begin{equation}
+    \text{Critic input: } [\mathbf{u}_t, \mathbf{w}_t, \mathbf{a}_{t-1}, \mathbf{a}_t] \in \R^{4 \times 64 \times 64}
+\end{equation}
+
+This appears redundant since:
+\begin{equation}
+    \mathbf{a}_{t-1}^{(t)} = \mathbf{a}_t^{(t-1)}
+\end{equation}
+
+\subsection{Why This Redundancy is Necessary}
+
+\begin{proposition}[Critic Requires Full State and Action]
+For proper Q-function approximation, the critic must receive both:
+\begin{enumerate}
+    \item The complete state: $\mathbf{s}_t = [\mathbf{u}_t, \mathbf{w}_t, \mathbf{a}_{t-1}]$
+    \item The current action being evaluated: $\mathbf{a}_t$
+\end{enumerate}
+\end{proposition}
+
+\begin{proof}
+The Q-function is defined as:
+\begin{equation}
+    Q: \mathcal{S} \times \mathcal{A} \to \R
+\end{equation}
+
+With augmented state:
+\begin{equation}
+    Q(\mathbf{s}_t, \mathbf{a}_t) = Q([\mathbf{u}_t, \mathbf{w}_t, \mathbf{a}_{t-1}], \mathbf{a}_t)
+\end{equation}
+
+The critic must evaluate \emph{how good} is action $\mathbf{a}_t$ \emph{given} that the previous action was $\mathbf{a}_{t-1}$. Both pieces of information are essential:
+\begin{itemize}
+    \item $\mathbf{a}_{t-1}$ (from state): Historical context
+    \item $\mathbf{a}_t$ (from action input): Current decision being evaluated
+\end{itemize}
+\end{proof}
+
+\subsection{Information Encoded in Redundancy}
+
+The apparent redundancy actually encodes valuable information:
+
+\subsubsection{Action Change Magnitude}
+\begin{equation}
+    \Delta \mathbf{a}_t = \mathbf{a}_t - \mathbf{a}_{t-1}
+\end{equation}
+
+The critic can learn:
+\begin{equation}
+    Q([\mathbf{u}, \mathbf{w}, \mathbf{a}_{\text{prev}}], \mathbf{a}_{\text{curr}}) = Q_{\text{base}}(\mathbf{u}, \mathbf{w}, \mathbf{a}_{\text{curr}}) - \lambda_Q \norm{\mathbf{a}_{\text{curr}} - \mathbf{a}_{\text{prev}}}^2
+\end{equation}
+
+\subsubsection{Context-Dependent Action Evaluation}
+
+The same action $\mathbf{a}_t$ has different value depending on action history:
+\begin{align}
+    Q([\mathbf{u}, \mathbf{w}, +0.9], +0.8) &> Q([\mathbf{u}, \mathbf{w}, -0.7], +0.8) \\
+    \text{(Smooth continuation)} & \quad \text{(Large jump)}
+\end{align}
+
+\subsection{Critic Network Architecture}
+
+The critic uses circular convolutions to process the full field:
+\begin{equation}
+    Q_\phi(\mathbf{s}_t, \mathbf{a}_t) = \text{MLP}\left(\text{Flatten}\left(\text{Conv}_{\text{circ}}\left(\begin{bmatrix}
+        \mathbf{u}_t \\
+        \mathbf{w}_t \\
+        \mathbf{a}_{t-1} \\
+        \mathbf{a}_t
+    \end{bmatrix}\right)\right)\right)
+\end{equation}
+
+Input channels:
+\begin{itemize}
+    \item Without action memory: $[u, w, a_{\text{curr}}]$ — 3 channels
+    \item With action memory: $[u, w, a_{\text{prev}}, a_{\text{curr}}]$ — 4 channels
+\end{itemize}
+
+\section{Implementation Details}
+
+\subsection{Environment Modifications}
+
+\subsubsection{State Representation}
+
+Each agent observes an $8 \times 8$ patch:
+\begin{equation}
+    \text{obs}^{(i)} = \begin{cases}
+        [\mathbf{u}^{(i)}, \mathbf{w}^{(i)}] & \text{without action memory (2 channels)} \\
+        [\mathbf{u}^{(i)}, \mathbf{w}^{(i)}, \alpha \cdot \mathbf{a}_{t-1}^{(i)}] & \text{with action memory (3 channels)}
+    \end{cases}
+\end{equation}
+
+where $\alpha$ is a scaling factor (default: 1.0).
+
+\subsubsection{Previous Action Field Tracking}
+
+The environment maintains:
+\begin{equation}
+    \mathbf{a}_{\text{field}}^{\text{prev}} \in \R^{64 \times 64}
+\end{equation}
+
+Updated after each step:
+\begin{equation}
+    \mathbf{a}_{\text{field}}^{\text{prev}} \leftarrow \mathbf{a}_{\text{field}}^{\text{curr}} - \overline{\mathbf{a}_{\text{field}}^{\text{curr}}}
+\end{equation}
+
+where the mean subtraction enforces zero-mean constraint (mass conservation).
+
+\subsubsection{Episode Reset}
+\begin{equation}
+    \mathbf{a}_{\text{field}}^{\text{prev}} \leftarrow \mathbf{0}_{64 \times 64} \quad \text{at episode start}
+\end{equation}
+
+\subsection{Actor Network Architecture}
+
+CNN encoder-decoder with variable input channels:
+\begin{align}
+    \text{Encoder:} \quad &\mathbf{h} = f_{\text{enc}}(\text{obs}) \in \R^{C \times 8 \times 8} \\
+    \text{Similarity:} \quad &\boldsymbol{\phi} = \text{GAP}(g_{\text{sim}}(\mathbf{h})) \in \R^{d_{\text{sim}}} \\
+    \text{Decoder:} \quad &\mathbf{a} = \tanh(f_{\text{dec}}(\mathbf{h})) \in [-1,1]^{8 \times 8}
+\end{align}
+
+Number of input channels:
+\begin{equation}
+    C_{\text{in}} = \begin{cases}
+        2 & \text{without action memory} \\
+        3 & \text{with action memory}
+    \end{cases}
+\end{equation}
+
+\subsection{Critic Network Architecture}
+
+Input preparation:
+\begin{equation}
+    \mathbf{X}_{\text{critic}} = \text{Reconstruct}(\{\text{obs}^{(i)}\}_{i=1}^{64}, \{\mathbf{a}^{(i)}\}_{i=1}^{64}) \in \R^{C_{\text{obs}} + 1 \times 64 \times 64}
+\end{equation}
+
+where $C_{\text{obs}} = 2$ or $3$ depending on whether action memory is enabled.
+
+Forward pass:
+\begin{align}
+    \mathbf{h}_1 &= \text{CircularConv}(\mathbf{X}_{\text{critic}}) \\
+    \mathbf{h}_2 &= \text{MaxPool}(\text{ReLU}(\text{GroupNorm}(\mathbf{h}_1))) \\
+    &\vdots \\
+    Q &= \text{Linear}(\text{Flatten}(\mathbf{h}_L)) \in \R
+\end{align}
+
+\subsection{Training Algorithm}
+
+\begin{algorithm}
+\caption{MADDPG with Action Memory}
+\begin{algorithmic}[1]
+\STATE Initialize actor $\pi_\theta$, critic $Q_\phi$, target networks $\pi_{\theta'}$, $Q_{\phi'}$
+\STATE Initialize replay buffer $\mathcal{D}$
+\FOR{episode $= 1, \ldots, N_{\text{episodes}}$}
+    \STATE Reset environment, set $\mathbf{a}_{-1} = \mathbf{0}$
+    \FOR{step $= 0, \ldots, T-1$}
+        \STATE Observe $\mathbf{s}_t = [\mathbf{u}_t, \mathbf{w}_t, \mathbf{a}_{t-1}]$
+        \STATE Select action $\mathbf{a}_t = \pi_\theta(\mathbf{s}_t) + \mathcal{N}(0, \sigma^2)$
+        \STATE Execute $\mathbf{a}_t$, observe $r_t$, $\mathbf{u}_{t+1}$, $\mathbf{w}_{t+1}$
+        \STATE Store transition $(\mathbf{s}_t, \mathbf{a}_t, r_t, \mathbf{s}_{t+1})$ in $\mathcal{D}$
+        \IF{training\_step mod train\_freq $= 0$}
+            \FOR{$g = 1, \ldots, G$}
+                \STATE Sample minibatch $\{(\mathbf{s}_j, \mathbf{a}_j, r_j, \mathbf{s}_{j+1})\}$ from $\mathcal{D}$
+                \STATE \textbf{Critic update:}
+                \STATE \quad Compute target: $y_j = r_j + \gamma Q_{\phi'}(\mathbf{s}_{j+1}, \pi_{\theta'}(\mathbf{s}_{j+1}))$
+                \STATE \quad Update: $\phi \leftarrow \phi - \eta_Q \nabla_\phi \frac{1}{B}\sum_j (Q_\phi(\mathbf{s}_j, \mathbf{a}_j) - y_j)^2$
+                \STATE \textbf{Actor update:}
+                \STATE \quad $\mathcal{L}_{\text{actor}} = -\frac{1}{B}\sum_j Q_\phi(\mathbf{s}_j, \pi_\theta(\mathbf{s}_j)) + \lambda_s \mathcal{L}_{\text{spatial}} + \lambda_c \mathcal{L}_{\text{consistency}}$
+                \STATE \quad Update: $\theta \leftarrow \theta - \eta_\pi \nabla_\theta \mathcal{L}_{\text{actor}}$
+                \STATE \textbf{Target update:}
+                \STATE \quad $\theta' \leftarrow \tau \theta + (1-\tau)\theta'$
+                \STATE \quad $\phi' \leftarrow \tau \phi + (1-\tau)\phi'$
+            \ENDFOR
+        \ENDIF
+    \ENDFOR
+\ENDFOR
+\end{algorithmic}
+\end{algorithm}
+
+\section{Backwards Compatibility}
+
+\subsection{Configuration-Based Selection}
+
+Action memory is enabled via configuration:
+\begin{verbatim}
+observation:
+  include_prev_action: true   # Enable (default: false)
+  prev_action_scale: 1.0      # Scaling factor
+\end{verbatim}
+
+\subsection{Automatic Channel Detection}
+
+The system automatically adapts:
+\begin{align}
+    C_{\text{in}}^{\text{actor}} &= \text{obs\_shape}[0] \in \{2, 3\} \\
+    C_{\text{in}}^{\text{critic}} &= C_{\text{in}}^{\text{actor}} + 1 \in \{3, 4\}
+\end{align}
+
+\subsection{Network Initialization}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lcc}
+\toprule
+Configuration & Actor Input & Critic Input \\
+\midrule
+Without action memory & $[u, w]$ (2 ch) & $[u, w, a_{\text{curr}}]$ (3 ch) \\
+With action memory & $[u, w, a_{\text{prev}}]$ (3 ch) & $[u, w, a_{\text{prev}}, a_{\text{curr}}]$ (4 ch) \\
+\bottomrule
+\end{tabular}
+\caption{Channel configuration for different modes}
+\end{table}
+
+\section{Expected Results}
+
+\subsection{Smoothness Metrics}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lcc}
+\toprule
+Metric & Without Memory & With Memory (Expected) \\
+\midrule
+Temporal gradient RMS & $\approx 0.4$ & $0.1$--$0.2$ \\
+High-freq FFT content & High & Reduced \\
+Action change rate & $> 50\%$ steps & $< 20\%$ steps \\
+\bottomrule
+\end{tabular}
+\caption{Expected smoothness improvements}
+\end{table}
+
+\subsection{Performance Metrics}
+
+\textbf{Important}: Drag reduction may slightly \emph{decrease} compared to bang-bang:
+\begin{equation}
+    \E[R_{\text{smooth}}] \approx \E[R_{\text{bang-bang}}] \quad \text{or slightly lower}
+\end{equation}
+
+This is an \textbf{acceptable trade-off} because:
+\begin{enumerate}
+    \item Bang-bang is not physically realizable (actuator limitations)
+    \item Smooth control is more robust to model mismatch
+    \item Avoids exploiting simulation-specific resonances
+    \item Breaks unstable feedback loop with wave dynamics
+\end{enumerate}
+
+The goal is \textbf{not} to maximize drag reduction at all costs, but to find \emph{smooth, robust, physically realizable} control that still achieves good performance.
+
+Total objective balances drag reduction with smoothness:
+\begin{equation}
+    J = \E[R_{\text{drag}}] - \lambda_s \E[\mathcal{L}_{\text{spatial}}] - \lambda_c \E[\mathcal{L}_{\text{consistency}}]
+\end{equation}
+
+Expected outcomes:
+\begin{itemize}
+    \item Drag reduction: $90\%$--$100\%$ of bang-bang performance (acceptable)
+    \item Temporal smoothness: $4\times$ improvement (crucial)
+    \item Physical realizability: Yes (vs no for bang-bang)
+    \item Robustness: Improved (no feedback instability)
+\end{itemize}
+
+\subsection{Learning Dynamics}
+
+Expected training progression:
+\begin{enumerate}
+    \item \textbf{Early training} (episodes 0--50): Policy ignores $\mathbf{a}_{t-1}$, still jumpy
+    \item \textbf{Mid training} (episodes 50--150): Policy starts using $\mathbf{a}_{t-1}$ context
+    \item \textbf{Late training} (episodes 150+): Smooth control emerges, temporal consistency learned
+\end{enumerate}
+
+\section{Zero-Mean Constraint: Critical Implementation Details}
+
+\subsection{The Problem with Post-Processing Correction}
+
+\textbf{Critical Discovery}: The standard approach of applying zero-mean correction as post-processing can \emph{itself cause} bang-bang behavior!
+
+\subsubsection{How External Correction Creates Oscillations}
+
+Standard implementation (PROBLEMATIC):
+\begin{algorithm}
+\caption{Post-Processing Zero-Mean (Problematic)}
+\begin{algorithmic}[1]
+\STATE Agents output raw actions: $\mathbf{a}_i^{\text{raw}}$ for $i = 1, \ldots, 64$
+\STATE Collect into field: $\mathbf{A}^{\text{raw}} \in \R^{64 \times 64}$
+\STATE Compute mean: $\mu = \frac{1}{N}\sum_{i,j} A^{\text{raw}}_{ij}$
+\STATE Apply correction: $\mathbf{A}^{\text{exec}} = \mathbf{A}^{\text{raw}} - \mu$
+\STATE Execute $\mathbf{A}^{\text{exec}}$, store in $\mathbf{a}_{\text{prev}}$ for next step
+\end{algorithmic}
+\end{algorithm}
+
+\textbf{The oscillation mechanism}:
+\begin{align}
+t=0: &\quad \mu_0 = +0.3 \quad \to \quad \mathbf{A}^{\text{exec}}_0 = \mathbf{A}^{\text{raw}}_0 - 0.3 \quad \text{(shift DOWN)} \\
+t=1: &\quad \mu_1 = -0.2 \quad \to \quad \mathbf{A}^{\text{exec}}_1 = \mathbf{A}^{\text{raw}}_1 + 0.2 \quad \text{(shift UP)} \\
+t=2: &\quad \mu_2 = +0.4 \quad \to \quad \mathbf{A}^{\text{exec}}_2 = \mathbf{A}^{\text{raw}}_2 - 0.4 \quad \text{(shift DOWN)}
+\end{align}
+
+Even if $\mathbf{A}^{\text{raw}}_t$ is smooth, \textbf{varying $\mu_t$ creates oscillating $\mathbf{A}^{\text{exec}}_t$}!
+
+\subsection{Gradient Mismatch Problem}
+
+With post-processing correction:
+\begin{equation}
+\frac{\partial \mathcal{L}}{\partial \theta} = \frac{\partial \mathcal{L}}{\partial \mathbf{A}^{\text{exec}}} \cdot \frac{\partial \mathbf{A}^{\text{exec}}}{\partial \theta}
+\end{equation}
+
+But gradient computation assumes:
+\begin{equation}
+\mathbf{A}^{\text{exec}} = \pi_\theta(\mathbf{s}) \quad \text{(direct control)}
+\end{equation}
+
+Reality with correction:
+\begin{equation}
+\mathbf{A}^{\text{exec}} = \pi_\theta(\mathbf{s}) - \frac{1}{N}\sum_{i=1}^N \pi_\theta(\mathbf{s}_i) \quad \text{(indirect, coupled)}
+\end{equation}
+
+The Jacobian is:
+\begin{equation}
+\frac{\partial A_i^{\text{exec}}}{\partial A_j^{\text{raw}}} = \begin{cases}
+1 - \frac{1}{N} & i = j \\
+-\frac{1}{N} & i \neq j
+\end{cases}
+\end{equation}
+
+\textbf{Gradients don't see this coupling!} Policy learns as if it directly controls executed actions.
+
+\subsection{Solution: Differentiable Zero-Mean Correction}
+
+Make the correction part of the computational graph:
+
+\begin{algorithm}
+\caption{Differentiable Zero-Mean (Correct)}
+\begin{algorithmic}[1]
+\STATE Forward pass all agents: $\mathbf{A}^{\text{raw}} = \pi_\theta(\mathbf{S})$
+\STATE Compute mean (differentiable): $\mu = \text{mean}(\mathbf{A}^{\text{raw}})$
+\STATE Apply correction (differentiable): $\mathbf{A} = \mathbf{A}^{\text{raw}} - \mu$
+\STATE Compute loss: $\mathcal{L} = -Q(\mathbf{S}, \mathbf{A}) + \lambda_s \mathcal{L}_{\text{spatial}} + \cdots$
+\STATE Backpropagate: $\nabla_\theta \mathcal{L}$ includes effect of zero-mean constraint
+\STATE Update: $\theta \leftarrow \theta - \eta \nabla_\theta \mathcal{L}$
+\end{algorithmic}
+\end{algorithm}
+
+\textbf{Key benefits}:
+\begin{enumerate}
+    \item Gradients properly account for zero-mean constraint
+    \item Policy learns to output actions with near-zero mean \emph{before} correction
+    \item Correction magnitude $|\mu|$ becomes smaller during training
+    \item Bang-bang oscillations from varying corrections are prevented
+\end{enumerate}
+
+\subsection{Per-Tile vs Global Zero-Mean Constraint}
+
+\subsubsection{Per-Tile Constraint is Physically Invalid}
+
+\textbf{Previously used (WRONG)}:
+\begin{equation}
+\mathcal{L}_{\text{zero}} = \frac{1}{N_{\text{agents}}}\sum_{i=1}^{N_{\text{agents}}} \left(\text{mean}(\mathbf{a}_i)\right)^2
+\end{equation}
+
+This penalizes non-zero mean per $8 \times 8$ tile.
+
+\textbf{Why this is invalid}: Different flow regions require different average actuation:
+\begin{itemize}
+    \item Upstream regions may need net blowing: $\text{mean}(\mathbf{a}_{\text{upstream}}) > 0$
+    \item Downstream regions may need net suction: $\text{mean}(\mathbf{a}_{\text{downstream}}) < 0$
+    \item Separated regions require strong local forcing
+\end{itemize}
+
+Forcing each tile to zero-mean is an \textbf{unphysical artificial constraint}!
+
+\subsubsection{Global Zero-Mean is Required}
+
+\textbf{Correct approach (mass conservation)}:
+\begin{equation}
+\mathcal{L}_{\text{global\_mean}} = \left(\frac{1}{64 \times 64}\sum_{i,j} A_{ij}\right)^2
+\end{equation}
+
+This enforces:
+\begin{equation}
+\text{mean}(\mathbf{A}_{\text{field}}) = 0 \quad \text{(incompressibility)}
+\end{equation}
+
+while allowing:
+\begin{equation}
+\text{mean}(\mathbf{a}_i) \neq 0 \quad \text{for individual tiles}
+\end{equation}
+
+\subsection{Implementation}
+
+\subsubsection{In Actor Network}
+
+During training (centralized):
+\begin{lstlisting}[language=Python]
+# Forward pass for all agents
+actions_raw = actor(obs_batch)  # [batch, 64, 8, 8]
+
+# Differentiable zero-mean correction
+global_mean = actions_raw.mean()  # Scalar, differentiable
+actions = actions_raw - global_mean  # [batch, 64, 8, 8]
+
+# Actions are now zero-mean AND gradients flow through!
+\end{lstlisting}
+
+During inference (decentralized):
+\begin{lstlisting}[language=Python]
+# Same correction applied at execution
+actions_raw = actor(obs)
+global_mean = actions_raw.mean()
+actions = actions_raw - global_mean
+return actions
+\end{lstlisting}
+
+\subsubsection{In Loss Function}
+
+Old approach (WRONG):
+\begin{equation}
+\mathcal{L}_{\text{actor}} = -Q + \lambda_{\text{spatial}} \mathcal{L}_{\text{spatial}} + \lambda_{\text{zero}} \underbrace{\sum_i (\text{mean}(\mathbf{a}_i))^2}_{\text{per-tile, invalid}}
+\end{equation}
+
+New approach (CORRECT):
+\begin{equation}
+\mathcal{L}_{\text{actor}} = -Q + \lambda_{\text{spatial}} \mathcal{L}_{\text{spatial}} + \lambda_{\text{global}} \underbrace{(\text{mean}(\mathbf{A}_{\text{field}}))^2}_{\text{global only, valid}}
+\end{equation}
+
+\subsection{Expected Impact}
+
+With these fixes:
+\begin{enumerate}
+    \item \textbf{Reduced bang-bang from corrections}: Policy learns to output near-zero mean $\to$ small $|\mu|$ $\to$ stable corrections
+    \item \textbf{Proper credit assignment}: Gradients include zero-mean constraint effect
+    \item \textbf{Physical validity}: Tiles can have non-zero mean as required by flow physics
+    \item \textbf{Training stability}: Network aware of constraint during learning
+\end{enumerate}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lcc}
+\toprule
+Approach & Gradients See Constraint & Physically Valid \\
+\midrule
+Post-processing + per-tile loss & \textcolor{red}{No} & \textcolor{red}{No} \\
+Differentiable + per-tile loss & \textcolor{green}{Yes} & \textcolor{red}{No} \\
+Post-processing + global loss & \textcolor{red}{No} & \textcolor{green}{Yes} \\
+\textbf{Differentiable + global loss} & \textcolor{green}{Yes} & \textcolor{green}{Yes} \\
+\bottomrule
+\end{tabular}
+\caption{Comparison of zero-mean constraint approaches}
+\end{table}
+
+\section{Conclusion}
+
+\subsection{Summary}
+
+We have shown that augmenting the state with previous action:
+\begin{equation}
+    \mathbf{s}_t = [\mathbf{u}_t, \mathbf{w}_t] \quad \to \quad \mathbf{s}_t = [\mathbf{u}_t, \mathbf{w}_t, \mathbf{a}_{t-1}]
+\end{equation}
+
+provides the policy with the necessary information to learn smooth temporal control while:
+\begin{enumerate}
+    \item Preserving the Markov property
+    \item Enabling adaptive (learned) temporal filtering
+    \item Maintaining clean credit assignment
+    \item Requiring minimal code changes
+    \item Ensuring full backwards compatibility
+\end{enumerate}
+
+\subsection{Key Advantages Over Alternatives}
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lccc}
+\toprule
+Approach & Markovian & Credit Assignment & Adaptive \\
+\midrule
+Temporal loss on replay & \textcolor{red}{No} & \textcolor{red}{Confused} & \textcolor{orange}{Partial} \\
+External filtering & \textcolor{green}{Yes} & \textcolor{red}{Broken} & \textcolor{red}{No} \\
+\textbf{Prev action in obs} & \textcolor{green}{Yes} & \textcolor{green}{Clean} & \textcolor{green}{Yes} \\
+\bottomrule
+\end{tabular}
+\caption{Comparison of approaches to temporal smoothness}
+\end{table}
+
+\subsection{Future Work}
+
+Potential extensions:
+\begin{enumerate}
+    \item Multiple-step action history: $\mathbf{s}_t = [\mathbf{u}_t, \mathbf{w}_t, \mathbf{a}_{t-1}, \mathbf{a}_{t-2}]$
+    \item Learned scaling: $\alpha(\mathbf{u}_t, \mathbf{w}_t)$ instead of fixed $\alpha$
+    \item Action delta encoding: $[\mathbf{u}_t, \mathbf{w}_t, \Delta \mathbf{a}_{t-1}]$ instead of absolute $\mathbf{a}_{t-1}$
+\end{enumerate}
+
+\end{document}

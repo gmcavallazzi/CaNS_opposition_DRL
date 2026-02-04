@@ -231,12 +231,18 @@ def train_maddpg_consistency(
 
     # Get agent list and observation/action spaces
     agents = env.possible_agents
-    obs_shape = env.observation_spaces[agents[0]].shape  # (2, 8, 8)
+    obs_shape = env.observation_spaces[agents[0]].shape  # (2, 8, 8) or (3, 8, 8)
     act_shape = env.action_spaces[agents[0]].shape  # (8, 8)
     num_agents = len(agents)  # 64 agents
 
+    # NEW: Auto-detect input channels from observation space
+    input_channels = obs_shape[0]  # First dimension is number of channels
+    include_prev_action = config.get('observation', {}).get('include_prev_action', False)
+
     print(f"Environment created with {num_agents} agents")
     print(f"Observation shape per agent: {obs_shape}")
+    print(f"Input channels: {input_channels} ({'[u,w,prev_action]' if input_channels == 3 else '[u,w]'})")
+    print(f"Include prev_action in obs: {include_prev_action}")
     print(f"Action shape per agent: {act_shape}")
 
     # Extract training parameters from config
@@ -291,7 +297,8 @@ def train_maddpg_consistency(
         gradient_clip=config['training']['gradient_clip'],
         lambda_temporal=config['model']['smoothness'].get('lambda_temporal', 0.0),
         lambda_spatial=config['model']['smoothness'].get('lambda_spatial', 0.5),
-        lambda_zero=config['model']['smoothness'].get('lambda_zero', 0.1),
+        lambda_zero=config['model']['smoothness'].get('lambda_zero', 0.0),  # Deprecated
+        lambda_global_mean=config['model']['smoothness'].get('lambda_global_mean', 0.05),  # NEW
         # Consistency loss parameters
         consistency_enable=consistency_enable,
         consistency_lambda=consistency_lambda,
@@ -299,7 +306,9 @@ def train_maddpg_consistency(
         consistency_margin=consistency_margin,
         consistency_boundary_only=consistency_boundary_only,
         consistency_warmup_steps=consistency_warmup_steps,
-        similarity_dim=similarity_dim
+        similarity_dim=similarity_dim,
+        # NEW: Pass input channels to support prev_action in observations
+        input_channels=input_channels
     )
 
     # Initialize replay buffer with previous action tracking
@@ -344,6 +353,7 @@ def train_maddpg_consistency(
     episode_temporal_losses = []
     episode_spatial_losses = []
     episode_zero_losses = []
+    episode_global_mean_losses = []  # NEW: track global zero-mean loss
     episode_consistency_losses = []  # NEW: track consistency loss
     episode_actions = []
 
@@ -379,10 +389,16 @@ def train_maddpg_consistency(
             with torch.no_grad():
                 all_actions = maddpg.select_actions_batched(all_obs_tensor)  # [64, 8, 8]
 
-                # Add exploration noise with decay schedule
+                # Add exploration noise with decay schedule (zero-mean to preserve zero-mean property)
                 noise_scale = compute_noise_scale(episode, config)
                 noise = np.random.normal(0, noise_scale, size=all_actions.shape)
-                all_actions = np.clip(all_actions + noise, -1, 1)
+                noise = noise - noise.mean()  # Make noise zero-mean
+                all_actions = all_actions + noise  # Still zero-mean
+                all_actions = np.clip(all_actions, -1, 1)  # Clipping might break zero-mean
+
+                # CRITICAL: Guarantee exact zero-mean for solver stability
+                # Must apply after clipping since clipping can break zero-mean property
+                all_actions = all_actions - all_actions.mean()
 
             # Store raw actions for logging
             episode_actions.extend(all_actions.flatten())
@@ -441,6 +457,7 @@ def train_maddpg_consistency(
                 batch_temporal_losses = []
                 batch_spatial_losses = []
                 batch_zero_losses = []
+                batch_global_mean_losses = []  # NEW
                 batch_consistency_losses = []  # NEW
                 batch_q_values = []
 
@@ -473,6 +490,7 @@ def train_maddpg_consistency(
                     total_smoothness = (loss_breakdown['temporal_loss'] +
                                        loss_breakdown['spatial_loss'] +
                                        loss_breakdown['zero_loss'] +
+                                       loss_breakdown['global_mean_loss'] +
                                        loss_breakdown['consistency_loss'])
 
                     if q_loss_abs > 0 and total_smoothness / q_loss_abs > 10.0:
@@ -488,6 +506,7 @@ def train_maddpg_consistency(
                     batch_temporal_losses.append(loss_breakdown['temporal_loss'])
                     batch_spatial_losses.append(loss_breakdown['spatial_loss'])
                     batch_zero_losses.append(loss_breakdown['zero_loss'])
+                    batch_global_mean_losses.append(loss_breakdown['global_mean_loss'])  # NEW
                     batch_consistency_losses.append(loss_breakdown['consistency_loss'])  # NEW
 
                     # Extract Q-values for tracking
@@ -581,6 +600,7 @@ def train_maddpg_consistency(
                 episode_temporal_losses.extend(batch_temporal_losses)
                 episode_spatial_losses.extend(batch_spatial_losses)
                 episode_zero_losses.extend(batch_zero_losses)
+                episode_global_mean_losses.extend(batch_global_mean_losses)  # NEW
                 episode_consistency_losses.extend(batch_consistency_losses)  # NEW
                 episode_q_values.extend(batch_q_values)
 
@@ -620,6 +640,8 @@ def train_maddpg_consistency(
                     writer.add_scalar('Episode/spatial_loss', np.mean(episode_spatial_losses), episode)
                 if episode_zero_losses:
                     writer.add_scalar('Episode/zero_loss', np.mean(episode_zero_losses), episode)
+                if episode_global_mean_losses:
+                    writer.add_scalar('Episode/global_mean_loss', np.mean(episode_global_mean_losses), episode)
 
                 # NEW: Log consistency loss
                 if episode_consistency_losses:
@@ -709,6 +731,7 @@ def train_maddpg_consistency(
                 episode_temporal_losses = []
                 episode_spatial_losses = []
                 episode_zero_losses = []
+                episode_global_mean_losses = []  # NEW
                 episode_consistency_losses = []  # NEW
                 episode_actions = []
                 episode_reward_history = []
