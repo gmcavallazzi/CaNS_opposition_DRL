@@ -659,9 +659,9 @@ class SharedPolicyMADDPGPoint:
         for target_param, param in zip(target.parameters(), source.parameters()):
             target_param.data.copy_(self.tau * param.data + (1.0 - self.tau) * target_param.data)
 
-    def save(self, filepath: str):
-        """Save model checkpoint."""
-        checkpoint = {
+    def state_dict(self):
+        """Return state dictionary (for compatibility with checkpoint saving)."""
+        return {
             'actor_state_dict': self.actor.state_dict(),
             'actor_target_state_dict': self.actor_target.state_dict(),
             'critic_state_dict': self.critic.state_dict(),
@@ -670,6 +670,20 @@ class SharedPolicyMADDPGPoint:
             'critic_optimizer_state_dict': self.critic_optimizer.state_dict(),
             'training_step': self.training_step
         }
+
+    def load_state_dict(self, state_dict):
+        """Load state dictionary (for compatibility with checkpoint loading)."""
+        self.actor.load_state_dict(state_dict['actor_state_dict'])
+        self.actor_target.load_state_dict(state_dict['actor_target_state_dict'])
+        self.critic.load_state_dict(state_dict['critic_state_dict'])
+        self.critic_target.load_state_dict(state_dict['critic_target_state_dict'])
+        self.actor_optimizer.load_state_dict(state_dict['actor_optimizer_state_dict'])
+        self.critic_optimizer.load_state_dict(state_dict['critic_optimizer_state_dict'])
+        self.training_step = state_dict.get('training_step', 0)
+
+    def save(self, filepath: str):
+        """Save model checkpoint."""
+        checkpoint = self.state_dict()
         torch.save(checkpoint, filepath)
         print(f"Model checkpoint saved to {filepath}")
 
@@ -680,13 +694,6 @@ class SharedPolicyMADDPGPoint:
             return False
 
         checkpoint = torch.load(filepath, map_location=self.device)
-        self.actor.load_state_dict(checkpoint['actor_state_dict'])
-        self.actor_target.load_state_dict(checkpoint['actor_target_state_dict'])
-        self.critic.load_state_dict(checkpoint['critic_state_dict'])
-        self.critic_target.load_state_dict(checkpoint['critic_target_state_dict'])
-        self.actor_optimizer.load_state_dict(checkpoint['actor_optimizer_state_dict'])
-        self.critic_optimizer.load_state_dict(checkpoint['critic_optimizer_state_dict'])
-        self.training_step = checkpoint.get('training_step', 0)
-
+        self.load_state_dict(checkpoint)
         print(f"Model checkpoint loaded from {filepath} (training_step={self.training_step})")
         return True
