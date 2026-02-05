@@ -80,3 +80,5 @@ checkpoints*/
 *.ind
 *.lof
 *.lot
+
+**/smoothness_check*/

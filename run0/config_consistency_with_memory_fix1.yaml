@@ -1,0 +1,171 @@
+# Configuration for MADDPG with Observation-Similarity Consistency Loss + Action Memory
+# FIX1: Increased smoothness penalties to prevent bang-bang behavior
+# Changes from original:
+#   - lambda_temporal: 0.0 → 0.5 (ENABLED temporal smoothness)
+#   - lambda_spatial: 0.5 → 5.0 (10x increase)
+#   - consistency.lambda: 0.1 → 1.0 (10x increase)
+#   - gradient_clip: 0.5 → 2.0 (allow policy refinement)
+#   - global_weight: 10.0 → 7.0 (reduce reward dominance)
+
+# General parameters
+total_timesteps: 1800000  # Total training steps
+maxprocs: [64]  # Number of MPI processes for CaNS
+
+# NEW: Observation parameters
+observation:
+  include_prev_action: true   # Add previous action as 3rd observation channel
+  prev_action_scale: 1.0      # Scale factor for prev_action channel (default: 1.0)
+
+# Network architecture for CNN-based agents
+net_arch:
+  actor_channels: [16, 32]     # CNN encoder channels for actor
+  critic_conv: [32, 64, 32]    # Convolutional layers for critic
+  critic_mlp: [256, 128]       # MLP layers after convolution for critic
+  similarity_dim: 16           # Dimension of similarity features for consistency loss
+
+# Action space parameters
+action:
+  om_max: 0.064
+  scaling_factor: 2.0  # Multiplier for actions sent to CaNS
+
+# Grid parameters
+grid:
+  target:
+    i: 64  # Full domain size (reconstructed from 8x8 patches)
+    j: 64
+
+# Reward parameters
+reward:
+  dpdx:
+    uncontrolled: -0.0042  # Natural flow without control (baseline)
+    target: -0.002         # Target for good control performance
+    max: -0.0018          # Excellent control (kept for reference)
+  global_weight: 7.0        # CHANGED: Reduced from 10.0 to reduce reward dominance
+  diversity:
+    enable: false
+    weight: -0.1
+    min_std_threshold: 0.01
+
+# Model parameters
+model:
+  learning_rate: 0.00025        # Actor learning rate
+  critic_learning_rate: 0.00008  # Critic learning rate
+  buffer_size: 5_000_000
+  weight_decay: 0.00001  # L2 regularization
+  batch_size: 32
+  tau: 0.005  # Soft update coefficient
+  gamma: 0.995  # Discount factor
+  train_freq: 300  # Steps between training updates
+  gradient_steps: 64  # Gradient steps per update
+  learning_starts: 5400  # Warmup: collect 3 episodes of data before training starts
+
+  # Smoothness constraints
+  smoothness:
+    # FIX1: ENABLED temporal smoothness to directly penalize oscillations
+    # Previous reasoning for lambda_temporal: 0.0 was that action memory makes it
+    # redundant, but analysis shows we need BOTH action memory AND temporal penalty
+    # to prevent bang-bang behavior.
+    lambda_temporal: 0.5     # CHANGED: 0.0 → 0.5 (ENABLED)
+    lambda_spatial: 5.0      # CHANGED: 0.5 → 5.0 (10x increase - prevent spatial roughness)
+    lambda_zero: 0.0         # DEPRECATED: per-agent zero-mean (physically invalid)
+    lambda_global_mean: 0.05 # NEW: global zero-mean constraint (mass conservation)
+
+    # NEW: Observation-similarity consistency loss
+    # FIX1: Increased weight to make consistency competitive with actor/critic losses
+    consistency:
+      enable: true
+      lambda: 1.0            # CHANGED: 0.1 → 1.0 (10x increase - enforce smooth transitions)
+      tau_similarity: 0.9    # Threshold for considering observations "similar" (0.85-0.95)
+      margin: 0.1            # Allowed action difference before penalty (0.05-0.2)
+      boundary_only: true    # Focus on patch edges for smoother transitions
+      warmup_steps: 5000     # Training steps before enabling consistency loss
+
+  # Exploration noise schedule
+  action_noise:
+    initial_sigma: 0.1     # Starting noise level
+    final_sigma: 0.01      # Final noise level
+    decay_episodes: 200    # Episodes to decay from initial to final
+    decay_type: "exponential"  # "linear", "exponential", or "polynomial"
+
+# Field shift parameters (for data augmentation)
+field_shift:
+  enable: true
+  dt: 0.0765  # Time step for shifting
+  domain_size:
+    Lx: 2.67  # Domain length in x direction
+    Ly: 0.8   # Domain length in y direction
+
+# Training parameters
+training:
+  start_episode_length: 1800  # Episode length in steps
+  save_freq: 3600  # Save checkpoint every N steps
+  gradient_clip: 2.0  # CHANGED: 0.5 → 2.0 (allow larger gradients for policy refinement)
+  xavier_init_gain: 1.5  # Xavier initialization gain
+
+  # Gradient monitoring and adaptive control
+  gradient_monitoring:
+    enable: true
+    log_frequency: 100  # Log gradient metrics every N steps
+    explosion_threshold: 50.0  # Gradient norm threshold for explosion
+    vanishing_threshold: 1e-6  # Minimum gradient norm for vanishing
+    adaptive_clipping: true  # Dynamically adjust gradient clipping
+    lr_reduction_factor: 0.95  # Factor to reduce LR when gradients explode
+    track_layer_wise: true  # Track gradients for individual layers
+
+# ==============================================================================
+# FIX1 CHANGES SUMMARY
+# ==============================================================================
+#
+# PROBLEM: Consistency and spatial losses were increasing during training,
+# indicating policy learning LESS smooth behavior over time. Analysis showed:
+#   1. Gradient clipping (0.5) preventing policy refinement (100% saturation)
+#   2. Smoothness penalties too weak (100-300x smaller than actor/critic losses)
+#   3. Temporal penalty disabled, no direct constraint on oscillations
+#
+# SOLUTION: Rebalance smoothness penalties vs. performance reward
+#   1. Increase gradient_clip: 0.5 → 2.0 (allow refinement)
+#   2. Increase lambda_spatial: 0.5 → 5.0 (10x - prevent spatial roughness)
+#   3. Increase consistency.lambda: 0.1 → 1.0 (10x - enforce consistency)
+#   4. Enable lambda_temporal: 0.0 → 0.5 (direct oscillation penalty)
+#   5. Reduce global_weight: 10.0 → 7.0 (optional - reduce reward dominance)
+#
+# EXPECTED RESULTS (after resuming from episode 107):
+#   - Consistency loss: stabilizes or decreases (was increasing 247%)
+#   - Spatial loss: stabilizes or decreases (was increasing 6455%)
+#   - Temporal gradient RMS: decreases toward < 0.2 (was 1.22)
+#   - Drag reduction: may dip to ~85% but recovers (was 88.7%)
+#   - Actor grad norm: should vary 0.5-2.0 (was stuck at 0.5)
+#
+# MONITORING PLAN:
+#   - Run 50 episodes as trial (episodes 108-158)
+#   - Check if smoothness losses stabilize/decrease
+#   - If not improving after 50 episodes → restart from scratch
+#   - If improving → continue to episode 250 for full convergence
+#
+# ==============================================================================
+# HYPERPARAMETER TUNING GUIDE (UPDATED FOR FIX1)
+# ==============================================================================
+#
+# IF POLICY BECOMES TOO STIFF (drag reduction drops significantly):
+#   - Decrease consistency.lambda: 1.0 -> 0.5
+#   - Decrease lambda_spatial: 5.0 -> 2.0
+#   - Decrease lambda_temporal: 0.5 -> 0.2
+#   - Policy needs more freedom to optimize performance
+#
+# IF POLICY IS STILL TOO AGGRESSIVE (oscillations persist):
+#   - Increase consistency.lambda: 1.0 -> 2.0
+#   - Increase lambda_spatial: 5.0 -> 10.0
+#   - Increase lambda_temporal: 0.5 -> 1.0
+#   - Decrease consistency.tau_similarity: 0.9 -> 0.85 (more pairs considered)
+#
+# BASELINE (this config - FIX1):
+#   - lambda_temporal: 0.5 (enabled)
+#   - lambda_spatial: 5.0 (strong)
+#   - lambda_global_mean: 0.05 (unchanged)
+#   - consistency.lambda: 1.0 (strong)
+#   - gradient_clip: 2.0 (relaxed)
+#   - global_weight: 7.0 (reduced)
+#
+# These parameters make smoothness penalties competitive with performance reward.
+# Expected to achieve temporal gradient RMS < 0.2 by episode 200-250.
+# ==============================================================================
