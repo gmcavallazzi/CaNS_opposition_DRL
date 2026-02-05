@@ -58,11 +58,17 @@ def test_consistency_model(checkpoint_path, config_path='config_consistency.yaml
     # Create agents list (64 agents in 8x8 grid)
     agents = [f"agent_{i}_{j}" for i in range(8) for j in range(8)]
 
+    # Determine input channels from config
+    include_prev_action = config.get('observation', {}).get('include_prev_action', False)
+    input_channels = 3 if include_prev_action else 2
+    print(f"Input channels: {input_channels} ({'with' if include_prev_action else 'without'} action memory)")
+
     # Initialize model with same parameters as training
     print("Initializing model...")
     maddpg = SharedPolicyMADDPGConsistency(
         agents=agents,
         device=device,
+        input_channels=input_channels,
         gamma=config['model']['gamma'],
         tau=config['model']['tau'],
         lr=config['model']['learning_rate'],

@@ -4,143 +4,154 @@
 \usetikzlibrary{shapes.geometric, arrows.meta, positioning, fit, calc, backgrounds}
 
 \tikzset{
-    block/.style={rectangle, draw, fill=blue!10, text width=5em, text centered, rounded corners, minimum height=3em},
-    wideblock/.style={rectangle, draw, fill=blue!10, text width=8em, text centered, rounded corners, minimum height=3em},
+    % Network blocks (Actor/Critic)
+    netblock/.style={rectangle, draw, very thick, fill=orange!10, text width=7em, text centered, rounded corners, minimum height=4em},
+    % Action-related blocks
+    actionblock/.style={rectangle, draw, fill=blue!10, text width=7em, text centered, rounded corners, minimum height=2.5em},
+    actionwideblock/.style={rectangle, draw, fill=blue!10, text width=8em, text centered, rounded corners, minimum height=3em},
+    % Action processing/correction blocks
+    actionprocessblock/.style={rectangle, draw, fill=teal!15, text width=8em, text centered, rounded corners, minimum height=3em},
+    % Observation-related blocks
+    obsblock/.style={rectangle, draw, fill=orange!20, text width=7em, text centered, rounded corners, minimum height=2.5em},
+    obsprocessblock/.style={rectangle, draw, fill=orange!20, text width=5em, text centered, rounded corners, minimum height=3em},
+    % Reward/Q-value blocks
+    rewardblock/.style={rectangle, draw, fill=yellow!10, text width=7em, text centered, rounded corners, minimum height=2.5em},
+    % Critic input
+    criticinputblock/.style={rectangle, draw, fill=pink!10, text width=7em, text centered, rounded corners, minimum height=2.5em},
+    % Replay buffer
+    bufferblock/.style={rectangle, draw, fill=gray!20, text width=8em, text centered, rounded corners, minimum height=3em},
+    % Environment blocks
     envblock/.style={rectangle, draw, fill=green!10, text width=6em, text centered, rounded corners, minimum height=3em},
-    netblock/.style={rectangle, draw, fill=orange!10, text width=7em, text centered, rounded corners, minimum height=4em},
+    % Loss block
     lossblock/.style={rectangle, draw, fill=red!10, text width=6em, text centered, rounded corners, minimum height=3em},
-    datablock/.style={rectangle, draw, fill=yellow!10, text width=7em, text centered, rounded corners, minimum height=2.5em},
+    % Arrows
     arrow/.style={-{Stealth[length=3mm]}, thick},
-    dashedarrow/.style={-{Stealth[length=3mm]}, thick, dashed},
+    bluearrow/.style={-{Stealth[length=3mm]}, thick, blue},
+    orangearrow/.style={-{Stealth[length=3mm]}, thick, orange},
+    purplearrow/.style={-{Stealth[length=3mm]}, thick, purple},
+    grayarrow/.style={-{Stealth[length=3mm]}, thick, gray},
     gradient/.style={-{Stealth[length=3mm]}, thick, red},
 }
 
 \begin{document}
-\begin{tikzpicture}[node distance=1.2cm, font=\small]
+\begin{tikzpicture}[node distance=1.0cm, font=\small]
 
-% Environment
+% Left: Environment
 \node[envblock] (env) {CaNS\\Environment};
-\node[datablock, below=0.8cm of env] (obs) {Observations\\$[\mathbf{u}_t, \mathbf{w}_t]$\\(64×64 field)};
 
-% Previous action storage
-\node[datablock, right=1.5cm of obs] (prevact) {Prev Action\\$\mathbf{a}_{t-1}$\\(64×64 field)};
+% Reward from environment (above env)
+\node[rewardblock, above=1.2cm of env] (reward) {Reward\\$r_t = -\text{d}p/\text{d}x$\\(drag reduction)};
+
+\node[obsblock, right=0.8cm of env] (obs) {Observations\\$[\mathbf{u}_t, \mathbf{w}_t]$\\(64×64 field)};
 
 % Patch extraction
-\node[block, below=0.8cm of obs] (patch) {Extract\\8×8 Patches\\(64 agents)};
-\node[datablock, below=0.8cm of patch] (obs3ch) {Observation\\$[\mathbf{u}, \mathbf{w}, \mathbf{a}_{t-1}]$\\(3×8×8)};
+\node[obsprocessblock, right=0.8cm of obs] (patch) {Extract\\64 8×8 Patches};
+
+% Previous action storage (above, centered in action memory region)
+\node[actionblock, above=1.2cm of patch] (prevact) {Prev Action\\$\mathbf{a}_{t-1}$\\(64×64 field)};
+\node[obsblock, right=0.8cm of patch] (obs3ch) {Observation\\$[\mathbf{u}, \mathbf{w}, \mathbf{a}_{t-1}]$\\(3×8×8)};
 
 % Actor Network
-\node[netblock, below=1.2cm of obs3ch] (actor) {\textbf{Actor CNN}\\Encoder-Decoder\\+ Similarity};
-\node[datablock, below=0.8cm of actor] (actraw) {Raw Actions\\$\mathbf{a}^{\text{raw}}_t$\\via $\tanh \in [-1,1]$};
+\node[netblock, right=1.2cm of obs3ch] (actor) {\textbf{Actor CNN}\\Encoder-Decoder\\+ Similarity};
+\node[actionblock, right=0.8cm of actor] (actraw) {Raw Actions\\$\mathbf{a}^{\text{raw}}_t$ $\tanh \in [-1,1]$};
 
 % Zero-mean correction
-\node[wideblock, below=0.8cm of actraw] (zeromean) {Zero-Mean\\Correction\\(differentiable)};
-\node[datablock, below=0.6cm of zeromean] (actcorr) {$\mathbf{a}_t = \mathbf{a}^{\text{raw}}_t - \mu$\\$\mu = \text{mean}(\mathbf{a}^{\text{raw}}_t)$};
+\node[actionprocessblock, right=0.8cm of actraw] (zeromean) {Zero-Mean\\Correction\\(differentiable)};
+\node[actionblock, right=0.6cm of zeromean] (actcorr) {$\mathbf{a}_t = \mathbf{a}^{\text{raw}}_t - \mu$\\$\mu = \text{mean}(\mathbf{a}^{\text{raw}}_t)$};
 
-% Noise and clipping (training only)
-\node[block, below=0.8cm of actcorr] (noise) {Add Noise\\(training)};
-\node[block, below=0.6cm of noise] (clip) {Clip to [-1,1]};
-\node[wideblock, below=0.6cm of clip] (finalmean) {Final Zero-Mean\\Guarantee};
-\node[datablock, below=0.6cm of finalmean] (actfinal) {$\mathbf{a}^{\text{final}}_t$\\(exactly zero-mean)};
+% Noise and zero-mean (combined block)
+\node[actionprocessblock, right=0.8cm of actcorr] (noisemean) {Noise + Clip\\+ Zero-Mean\\(training)};
+\node[actionblock, right=0.6cm of noisemean] (actfinal) {$\mathbf{a}^{\text{final}}_t$\\(exactly zero-mean)};
 
-% Critic Network (on the right side)
-\node[netblock, right=4cm of actcorr] (critic) {\textbf{Critic CNN}\\Circular Conv\\+ MLP};
-\node[datablock, above=0.8cm of critic] (criticinput) {Critic Input\\$[\mathbf{u}, \mathbf{w}, \mathbf{a}_{t-1}, \mathbf{a}_t]$\\(4×64×64)};
-\node[datablock, below=0.8cm of critic] (qvalue) {Q-value\\$Q(\mathbf{s}_t, \mathbf{a}_t)$};
+% Back to environment (complete the loop)
+\node[envblock, right=0.8cm of actfinal] (execute) {Execute\\in CaNS};
+
+% Critic Network (above the main flow)
+\node[netblock, above=2.5cm of actcorr] (critic) {\textbf{Critic CNN}\\Circular Conv\\+ MLP};
+\node[criticinputblock, left=0.8cm of critic] (criticinput) {Critic Input\\$[\mathbf{u}, \mathbf{w}, \mathbf{a}_{t-1}, \mathbf{a}_t]$\\(4×64×64)};
+\node[rewardblock, right=0.8cm of critic] (qvalue) {Q-value\\$Q(\mathbf{s}_t, \mathbf{a}_t)$};
 
 % Loss computation
-\node[lossblock, below=0.8cm of qvalue] (actorloss) {Actor Loss\\$\mathcal{L} = -Q + \lambda_s \mathcal{L}_s$\\$+ \lambda_g \mathcal{L}_g + \lambda_c \mathcal{L}_c$};
+\node[lossblock, right=0.8cm of qvalue] (actorloss) {Actor Loss\\$\mathcal{L} = -Q + \lambda_s \mathcal{L}_s$ $+ \lambda_g \mathcal{L}_g + \lambda_c \mathcal{L}_c$};
 
-% Replay buffer (left side)
-\node[wideblock, left=3.5cm of actcorr] (buffer) {Replay Buffer\\Store transitions};
+% Replay buffer (left of critic input)
+\node[bufferblock, left=1.8cm of criticinput] (buffer) {Replay Buffer\\Store transitions};
 
-% Back to environment
-\node[envblock, left=1.5cm of env] (execute) {Execute\\in CaNS};
-
-% Draw arrows - Forward pass
+% Draw arrows - Forward pass (horizontal flow)
 \draw[arrow] (env) -- (obs);
+\draw[arrow] (env) -- (reward);
 \draw[arrow] (obs) -- (patch);
-\draw[arrow] (prevact) -- (patch);
+%\draw[arrow] (prevact) -| (patch);
 \draw[arrow] (patch) -- (obs3ch);
 \draw[arrow] (obs3ch) -- (actor);
 \draw[arrow] (actor) -- (actraw);
 \draw[arrow] (actraw) -- (zeromean);
 \draw[arrow] (zeromean) -- (actcorr);
-\draw[arrow] (actcorr) -- (noise);
-\draw[arrow] (noise) -- (clip);
-\draw[arrow] (clip) -- (finalmean);
-\draw[arrow] (finalmean) -- (actfinal);
+\draw[arrow] (actcorr) -- (noisemean);
+\draw[arrow] (noisemean) -- (actfinal);
 
-% Actions to environment
-\draw[arrow] (actfinal) -| ($(actfinal)!0.5!(buffer)$) |- (execute);
-\draw[arrow] (execute) -- (env);
+% Actions to environment (loop back below main flow)
+\draw[arrow] (actfinal) -- (execute);
+\draw[arrow] (execute.south) |- ($(execute.south)+(0,-1)$) -| (env.south);
 
-% Actions to replay buffer
-\draw[arrow] ($(actfinal)!0.5!(buffer)$) -- (buffer);
-\draw[arrow] (obs3ch) -| (buffer);
+% Actions to replay buffer (routed to avoid crossing blocks)
+% actfinal in blue, approaches from below (offset from center to avoid overlap)
+\draw[bluearrow] (actfinal.north) -- ++(0,1.6) -| ($(buffer.south)+(0.5,0)$);
 
-% Critic input preparation
-\draw[arrow] (obs3ch) -- ++(3,0) |- (criticinput);
-\draw[arrow] (actcorr) -- (criticinput);
+% Previous action to extract patches
+\draw[bluearrow] (prevact) -- (patch);
+
+% obs3ch leaves from top (offset), goes up, right, up again to buffer from below (offset)
+\draw[orangearrow] (obs3ch.north) -- ++(0,1.0) -| (buffer.south);
+
+% reward approaches buffer from the left (west side)
+\draw[grayarrow] (reward.north)  |- (buffer.west);
+
+% Replay buffer to critic (training updates)
+\draw[arrow, dashed] (buffer.east) -- (criticinput.west) node[midway, above, font=\small, align=left] {Training\\ batches};
+
+% Critic branch - inputs from main flow
+\draw[orangearrow] (obs3ch.north) -- ++(0,0.8) -| (criticinput.south);
+\draw[purplearrow] (actcorr.north) -- ++(0,1.0) -| ($(criticinput.south)+(0.4,0)$);
+
+% Critic forward pass (clear horizontal flow)
 \draw[arrow] (criticinput) -- (critic);
 \draw[arrow] (critic) -- (qvalue);
 \draw[arrow] (qvalue) -- (actorloss);
 
-% Gradient flow (red dashed)
-\draw[gradient] (actorloss) -- ++(0,1) -| (critic);
-\draw[gradient] (actorloss) -- ++(-2,0) |- ($(actcorr)!0.5!(zeromean)$);
-\draw[gradient] ($(actcorr)!0.5!(zeromean)$) -- (zeromean);
-\draw[gradient] (zeromean) -- (actraw);
-\draw[gradient] (actraw) -- (actor);
+% Gradient flow (red arrows - arched to avoid main flow, slightly off-center)
+\draw[gradient] (actorloss.west) to[out=120, in=45] ($(critic.north)+(0.3,0)$);
+\draw[gradient] (actorloss.south) to[out=270, in=90] ($(actcorr.north)+(0.2,0)$);
+\draw[gradient] ($(actcorr.west)+(0,0.2)$) -- ($(zeromean.east)+(0,0.2)$);
+\draw[gradient] ($(zeromean.west)+(0,0.2)$) -- ($(actraw.east)+(0,0.2)$);
+\draw[gradient] ($(actraw.west)+(0,0.2)$) -- ($(actor.east)+(0,0.2)$);
 
-% Store prev_action
-\draw[dashedarrow] (actfinal) -- ++(4,0) |- (prevact);
+% Nabla symbols on curved gradient arrows
+\node[fill=white, inner sep=1pt, font=\large, text=red] at ($(critic.west)+(2.6,1.1)$) {$\nabla$};
+\node[fill=white, inner sep=1pt, font=\large, text=red] at ($(actcorr.north)+(1.1,0.9)$) {$\nabla$};
 
-% Annotations
-\node[above=0.3cm of env, text width=6cm, align=center] {\textbf{Environment Loop}};
-\node[above=0.3cm of actor, text width=5cm, align=center] {\textbf{Policy Network}};
-\node[above=0.3cm of critic, text width=5cm, align=center] {\textbf{Value Network}};
+% Store prev_action (loop back to top)
+\draw[bluearrow] (actfinal) |- (prevact);
 
-% Loss components annotation
-\node[right=0.2cm of actorloss, text width=4cm, font=\tiny, align=left] {
+% Loss components annotation (larger font, positioned right)
+\node[right=0.3cm of actorloss, text width=5cm, font=\small, align=left] {
+    \textbf{Loss Components:}\\[2pt]
+    $Q$: Q-value (from Critic)\\
     $\mathcal{L}_s$: Spatial smoothness\\
     $\mathcal{L}_g$: Global zero-mean\\
     $\mathcal{L}_c$: Consistency
 };
 
-% Channel annotation
-\node[left=0.2cm of obs3ch, text width=3cm, font=\tiny, align=right] {
-    3 channels:\\
-    u, w, prev\_action
-};
-
-% Training vs inference note
-\node[left=0.2cm of noise, text width=3cm, font=\tiny, align=right] {
-    Training only:\\
-    Annealed over time
-};
-
-\node[left=0.2cm of finalmean, text width=3cm, font=\tiny, align=right] {
-    Always applied:\\
-    Guarantees exact\\
-    zero-mean
-};
-
-% Gradient flow annotation
-\node[below=0.2cm of actorloss, text width=4cm, font=\tiny, align=center, text=red] {
-    Red arrows: Gradient backpropagation
-};
-
 % Key insight box
 \begin{scope}[on background layer]
-\node[draw, fill=blue!5, thick, rounded corners, fit={(obs3ch) (prevact)}, inner sep=8pt] (actionmemory) {};
+\node[draw, fill=blue!5, thick, rounded corners, fit={(obs) (obs3ch) (prevact) (patch)}, inner sep=10pt] (actionmemory) {};
 \end{scope}
-\node[above right=-0.2cm and -0.2cm of actionmemory.north west, fill=blue!5, font=\tiny\bfseries] {Action Memory};
+\node[below left=-0.2cm and -0.2cm of actionmemory.south east, fill=blue!5, font=\small\bfseries] {Action Memory};
 
 \begin{scope}[on background layer]
-\node[draw, fill=orange!5, thick, rounded corners, fit={(zeromean) (actcorr) (finalmean)}, inner sep=8pt] (zeroconstraint) {};
+\node[draw, fill=orange!5, thick, rounded corners, fit={(zeromean) (actcorr) (noisemean)}, inner sep=10pt] (zeroconstraint) {};
 \end{scope}
-\node[above right=-0.2cm and -0.2cm of zeroconstraint.north west, fill=orange!5, font=\tiny\bfseries] {Zero-Mean Constraint};
+\node[below left=-0.1cm and -0.35cm of zeroconstraint.south east, fill=orange!5, font=\small\bfseries] {Zero-Mean Constraint};
 
 \end{tikzpicture}
 \end{document}

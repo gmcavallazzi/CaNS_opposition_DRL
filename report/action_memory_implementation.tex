@@ -510,40 +510,6 @@ Forward pass:
 \end{algorithmic}
 \end{algorithm}
 
-\section{Backwards Compatibility}
-
-\subsection{Configuration-Based Selection}
-
-Action memory is enabled via configuration:
-\begin{verbatim}
-observation:
-  include_prev_action: true   # Enable (default: false)
-  prev_action_scale: 1.0      # Scaling factor
-\end{verbatim}
-
-\subsection{Automatic Channel Detection}
-
-The system automatically adapts:
-\begin{align}
-    C_{\text{in}}^{\text{actor}} &= \text{obs\_shape}[0] \in \{2, 3\} \\
-    C_{\text{in}}^{\text{critic}} &= C_{\text{in}}^{\text{actor}} + 1 \in \{3, 4\}
-\end{align}
-
-\subsection{Network Initialization}
-
-\begin{table}[h]
-\centering
-\begin{tabular}{lcc}
-\toprule
-Configuration & Actor Input & Critic Input \\
-\midrule
-Without action memory & $[u, w]$ (2 ch) & $[u, w, a_{\text{curr}}]$ (3 ch) \\
-With action memory & $[u, w, a_{\text{prev}}]$ (3 ch) & $[u, w, a_{\text{prev}}, a_{\text{curr}}]$ (4 ch) \\
-\bottomrule
-\end{tabular}
-\caption{Channel configuration for different modes}
-\end{table}
-
 \section{Expected Results}
 
 \subsection{Smoothness Metrics}
