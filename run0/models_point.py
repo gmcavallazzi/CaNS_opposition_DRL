@@ -640,10 +640,12 @@ class SharedPolicyMADDPGPoint:
         self._soft_update(self.actor, self.actor_target)
         self._soft_update(self.critic, self.critic_target)
 
-        # Prepare loss breakdown
+        # Prepare loss breakdown (include all losses for compatibility with training script)
         loss_breakdown = {
             'q_loss': q_loss.item(),
             'temporal_loss': temporal_loss.item(),
+            'spatial_loss': 0.0,  # Not used in point-based (no patches)
+            'zero_loss': 0.0,     # Deprecated (use global_mean_loss instead)
             'global_mean_loss': global_mean_loss.item(),
             'consistency_loss': consistency_loss.item(),
             'actor_grad_norm': actor_grad_norm.item(),

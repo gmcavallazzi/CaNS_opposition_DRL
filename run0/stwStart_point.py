@@ -281,20 +281,19 @@ def train_maddpg_point(
         critic_lr=config['model']['critic_learning_rate'],
         weight_decay=config['model']['weight_decay'],
         device=device,
-        actor_hidden_dims=config.get('net_arch', {}).get('actor_mlp', [64, 64]),
+        actor_hidden_dim=config.get('net_arch', {}).get('actor_hidden_dim', 16),
         critic_conv_channels=config.get('net_arch', {}).get('critic_conv', [32, 64, 32]),
         critic_mlp_layers=config.get('net_arch', {}).get('critic_mlp', [256, 128]),
+        dropout_rate=config.get('net_arch', {}).get('dropout_rate', 0.05),
         gradient_clip=config['training']['gradient_clip'],
         lambda_temporal=config['model']['smoothness'].get('lambda_temporal', 0.0),
-        lambda_spatial=config['model']['smoothness'].get('lambda_spatial', 0.5),
-        lambda_zero=config['model']['smoothness'].get('lambda_zero', 0.0),  # Deprecated
-        lambda_global_mean=config['model']['smoothness'].get('lambda_global_mean', 0.05),  # NEW
+        lambda_global_mean=config['model']['smoothness'].get('lambda_global_mean', 0.05),
         # Consistency loss parameters
         consistency_enable=consistency_enable,
         consistency_lambda=consistency_lambda,
         consistency_tau=consistency_tau,
         consistency_margin=consistency_margin,
-        consistency_boundary_only=consistency_boundary_only,
+        consistency_sample_size=consistency_config.get('sample_size', 512),
         consistency_warmup_steps=consistency_warmup_steps,
         similarity_dim=similarity_dim,
         # Pass input channels to support prev_action in observations
@@ -514,11 +513,8 @@ def train_maddpg_point(
                         obs_batch_sample = batch['obs']
                         act_batch_sample = batch['acts']
 
-                        # Prepare spatial data for critic (point-based)
-                        obs_fields, act_field = maddpg._prepare_spatial_data(
-                            obs_batch_sample, act_batch_sample
-                        )
-                        q_values = maddpg.critic(obs_fields, act_field)
+                        # Point-based critic takes point observations directly
+                        q_values = maddpg.critic(obs_batch_sample, act_batch_sample)
                         batch_q_values.append(q_values.mean().item())
 
                 # Gradient monitoring and adaptive control
