@@ -1,0 +1,165 @@
+# Configuration for Point-Based MADDPG (4096 agents, 1 point each)
+# Each agent controls a single point in the 64×64 action field
+
+# General parameters
+total_timesteps: 1800000  # Total training steps
+maxprocs: [64]  # Number of MPI processes for CaNS
+
+# Observation parameters
+observation:
+  include_prev_action: true   # CRITICAL: Add previous action for temporal smoothness
+  prev_action_scale: 1.0      # Scale factor for prev_action channel
+
+# Network architecture for point-based agents
+net_arch:
+  actor_hidden_dim: 16         # Single hidden layer for MLP actor (VERY SMALL!)
+  critic_conv: [32, 64, 32]    # Conv layers for hybrid CNN critic (reconstructs field)
+  critic_mlp: [256, 128]       # MLP layers after conv for critic
+  similarity_dim: 16           # Dimension of similarity features for consistency loss
+  dropout_rate: 0.05
+
+# Action space parameters
+action:
+  om_max: 0.064
+  scaling_factor: 2.0  # Multiplier for actions sent to CaNS
+
+# Grid parameters
+grid:
+  target:
+    i: 64  # Full domain size (64×64 grid, 4096 points)
+    j: 64
+
+# Reward parameters
+reward:
+  dpdx:
+    uncontrolled: -0.0042  # Natural flow without control (baseline)
+    target: -0.002         # Target for good control performance
+    max: -0.0018          # Excellent control (kept for reference)
+  global_weight: 10.0       # Amplify drag reduction signal
+  diversity:
+    enable: false           # Diversity penalty not applicable for point-based
+    weight: -0.1
+    min_std_threshold: 0.01
+
+# Model parameters
+model:
+  learning_rate: 0.00025        # Actor learning rate
+  critic_learning_rate: 0.00008  # Critic learning rate
+  buffer_size: 500_000           # REDUCED: Point-based needs less (memory intensive!)
+  weight_decay: 0.00001          # L2 regularization
+  batch_size: 32
+  tau: 0.005                     # Soft update coefficient
+  gamma: 0.995                   # Discount factor
+  train_freq: 300                # Steps between training updates
+  gradient_steps: 64             # Gradient steps per update
+  learning_starts: 5400          # Warmup: collect ~3 episodes before training starts
+
+  # Smoothness constraints
+  smoothness:
+    # IMPORTANT: Temporal loss is disabled because prev_action is in observations.
+    # Policy learns smoothness naturally from action memory context.
+    lambda_temporal: 0.0         # Disabled - prev_action in obs provides context
+    lambda_spatial: 0.0          # DISABLED: No spatial loss (point-based has no patches)
+    lambda_zero: 0.0             # DEPRECATED: per-tile zero-mean (physically invalid)
+    lambda_global_mean: 0.05     # NEW: global zero-mean constraint (mass conservation)
+
+    # Observation-similarity consistency loss (OPTIONAL - expensive for 4096 agents)
+    # Uses sampling to keep computation tractable
+    consistency:
+      enable: false              # Start disabled (expensive with 4096 agents)
+      lambda: 0.1                # Weight for consistency loss
+      tau_similarity: 0.9        # Threshold for considering observations "similar"
+      margin: 0.1                # Allowed action difference before penalty
+      sample_size: 512           # Sample this many agents for pairwise comparison
+      warmup_steps: 5000         # Training steps before enabling consistency loss
+
+  # Exploration noise schedule
+  action_noise:
+    initial_sigma: 0.1     # Starting noise level
+    final_sigma: 0.01      # Final noise level
+    decay_episodes: 200    # Episodes to decay from initial to final
+    decay_type: "exponential"  # "linear", "exponential", or "polynomial"
+
+# Field shift parameters (for data augmentation)
+field_shift:
+  enable: true
+  dt: 0.0765  # Time step for shifting
+  domain_size:
+    Lx: 2.67  # Domain length in x direction
+    Ly: 0.8   # Domain length in y direction
+
+# Training parameters
+training:
+  start_episode_length: 1800  # Episode length in steps
+  save_freq: 3600             # Save checkpoint every N steps
+  gradient_clip: 0.5          # Gradient clipping threshold
+  xavier_init_gain: 1.5       # Xavier initialization gain
+
+  # Gradient monitoring and adaptive control
+  gradient_monitoring:
+    enable: true
+    log_frequency: 100           # Log gradient metrics every N steps
+    explosion_threshold: 50.0    # Gradient norm threshold for explosion
+    vanishing_threshold: 1e-6    # Minimum gradient norm for vanishing
+    adaptive_clipping: true      # Dynamically adjust gradient clipping
+    lr_reduction_factor: 0.95    # Factor to reduce LR when gradients explode
+    track_layer_wise: true       # Track gradients for individual layers
+
+# ==============================================================================
+# POINT-BASED SYSTEM NOTES
+# ==============================================================================
+#
+# ARCHITECTURE:
+#   - 4096 agents in 64×64 grid (one agent per point)
+#   - Each agent observes: (2,) scalars [u, w] or (3,) scalars [u, w, prev_action]
+#   - Each agent outputs: (1,) scalar action
+#   - Actor: Tiny MLP (3→16→1, ~100 parameters) - SHARED across all 4096 agents
+#   - Critic: Hybrid CNN (reconstructs 64×64 field, then uses circular convolutions)
+#
+# KEY DIFFERENCES FROM PATCH-BASED:
+#   1. No spatial smoothness loss (lambda_spatial: 0.0)
+#      - Point-based has no patches, rely on action memory + consistency loss
+#   2. Smaller replay buffer (500K instead of 5M)
+#      - Point-based observations are smaller (2-3 scalars vs 128 values)
+#      - But 4096 agents → total memory similar to patch-based
+#   3. Consistency loss is expensive (4096×4096 comparisons)
+#      - Uses sampling (only 512 agents at a time)
+#      - Consider disabling if training is too slow
+#   4. Action field reconstruction is automatic
+#      - Environment directly reshapes 4096 scalar actions → 64×64 field
+#
+# ZERO-MEAN CONSTRAINT (CRITICAL):
+#   - Applied TWICE during action selection:
+#     1. After actor output (differentiable, gradient flow)
+#     2. After noise+clipping (exact zero-mean for solver)
+#   - Global mean across ALL 4096 agents (not per-agent)
+#   - Same exact approach as patch-based system
+#
+# MEMORY ESTIMATION:
+#   - With obs_channels=3, capacity=500K, 4096 agents:
+#     - Observation buffer: 500K × 4096 × 3 × 4 bytes = ~24 GB
+#     - Action buffer: 500K × 4096 × 1 × 4 bytes = ~8 GB
+#     - Total: ~36 GB (manageable on most systems)
+#   - If OOM: reduce buffer_size to 100K-200K
+#
+# EXPECTED BEHAVIOR:
+#   - Faster training per step (tiny MLP vs CNN)
+#   - Similar or better drag reduction (finer control)
+#   - Smooth actions (via action memory + global zero-mean)
+#   - May need more episodes to converge (4096 agents vs 64)
+#
+# HYPERPARAMETER TUNING:
+#   - If actions too uniform → disable consistency loss, reduce lambda_global_mean
+#   - If actions too noisy → enable consistency loss, increase lambda_global_mean
+#   - If training too slow → reduce buffer_size, reduce gradient_steps
+#   - If memory issues → reduce buffer_size to 100K-200K
+#
+# RECOMMENDED STARTING POINT (current config):
+#   - observation.include_prev_action: true (CRITICAL for smoothness)
+#   - lambda_temporal: 0.0 (disabled, use action memory)
+#   - lambda_spatial: 0.0 (disabled, no patches)
+#   - lambda_global_mean: 0.05 (global zero-mean)
+#   - consistency.enable: false (start simple, expensive with 4096 agents)
+#   - buffer_size: 500_000 (reduced from 5M)
+#   - actor_hidden_dim: 16 (tiny MLP!)
+# ==============================================================================

@@ -295,7 +295,10 @@ def main():
         point_w = data['point_w'][t_start:t_end]
         point_action = data['point_action'][t_start:t_end]
 
-        fig, axes = plt.subplots(4, 1, figsize=(15, 16))
+        # Get dpdx data (full episode, not just focused window)
+        dpdx_vals = data['dpdx'][t_start:t_end] if 'dpdx' in data else None
+
+        fig, axes = plt.subplots(5, 1, figsize=(15, 20))
 
         t_vals = np.arange(t_start, t_end)
 
@@ -320,14 +323,28 @@ def main():
                          f'Mean={np.mean(point_action):.4f}, Std={np.std(point_action):.4f}')
         axes[2].grid(True, alpha=0.3)
 
+        # dpdx (drag)
+        if dpdx_vals is not None:
+            axes[3].plot(t_vals, dpdx_vals, linewidth=1, alpha=0.8, color='purple')
+            axes[3].axhline(y=-0.002, color='g', linestyle='--', alpha=0.7, label='Target')
+            axes[3].axhline(y=-0.0042, color='orange', linestyle='--', alpha=0.7, label='Uncontrolled')
+            axes[3].set_ylabel('dpdx')
+            axes[3].set_title(f'Performance: Pressure Gradient (Drag)\n'
+                             f'Mean={np.mean(dpdx_vals):.6f}, Std={np.std(dpdx_vals):.6f}')
+            axes[3].legend()
+            axes[3].grid(True, alpha=0.3)
+        else:
+            axes[3].text(0.5, 0.5, 'dpdx data not available',
+                        transform=axes[3].transAxes, ha='center', va='center')
+
         # Correlation plot
-        axes[3].scatter(point_u, point_action, alpha=0.3, s=10, label='U vs Action')
-        axes[3].scatter(point_w, point_action, alpha=0.3, s=10, label='W vs Action')
-        axes[3].set_xlabel('Velocity')
-        axes[3].set_ylabel('Action')
-        axes[3].set_title('Input-Output Correlation at point (32,32)')
-        axes[3].legend()
-        axes[3].grid(True, alpha=0.3)
+        axes[4].scatter(point_u, point_action, alpha=0.3, s=10, label='U vs Action')
+        axes[4].scatter(point_w, point_action, alpha=0.3, s=10, label='W vs Action')
+        axes[4].set_xlabel('Velocity')
+        axes[4].set_ylabel('Action')
+        axes[4].set_title('Input-Output Correlation at point (32,32)')
+        axes[4].legend()
+        axes[4].grid(True, alpha=0.3)
 
         plt.tight_layout()
         plt.savefig(os.path.join(output_dir, '05_input_output_point32_32.png'),
