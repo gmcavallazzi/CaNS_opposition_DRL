@@ -56,18 +56,20 @@ model:
 
   # Smoothness constraints
   smoothness:
-    # IMPORTANT: Temporal loss is disabled because prev_action is in observations.
-    # Policy learns smoothness naturally from action memory context.
-    lambda_temporal: 0.0         # Disabled - prev_action in obs provides context
+    # CRITICAL: Temporal smoothness MUST be enabled to prevent bang-bang policies!
+    # Action memory alone is insufficient - bang-bang can give good rewards.
+    # This directly penalizes |action(t) - action(t-1)|^2
+    lambda_temporal: 0.5         # ENABLED: Penalize rapid action changes (was 0.0)
     lambda_spatial: 0.0          # DISABLED: No spatial loss (point-based has no patches)
     lambda_zero: 0.0             # DEPRECATED: per-tile zero-mean (physically invalid)
-    lambda_global_mean: 0.05     # NEW: global zero-mean constraint (mass conservation)
+    lambda_global_mean: 0.1      # Increased from 0.05 for stronger smoothness
 
-    # Observation-similarity consistency loss (OPTIONAL - expensive for 4096 agents)
-    # Uses sampling to keep computation tractable
+    # Observation-similarity consistency loss
+    # ENABLED to prevent bang-bang: agents with similar obs should have similar actions
+    # Uses sampling (512 agents) to keep computation tractable with 4096 agents
     consistency:
-      enable: false              # Start disabled (expensive with 4096 agents)
-      lambda: 0.1                # Weight for consistency loss
+      enable: true               # ENABLED: Critical for preventing bang-bang
+      lambda: 0.3                # Increased from 0.1 for stronger effect
       tau_similarity: 0.9        # Threshold for considering observations "similar"
       margin: 0.1                # Allowed action difference before penalty
       sample_size: 512           # Sample this many agents for pairwise comparison
@@ -148,18 +150,45 @@ training:
 #   - Smooth actions (via action memory + global zero-mean)
 #   - May need more episodes to converge (4096 agents vs 64)
 #
-# HYPERPARAMETER TUNING:
-#   - If actions too uniform → disable consistency loss, reduce lambda_global_mean
-#   - If actions too noisy → enable consistency loss, increase lambda_global_mean
-#   - If training too slow → reduce buffer_size, reduce gradient_steps
-#   - If memory issues → reduce buffer_size to 100K-200K
+# BANG-BANG PREVENTION (CRITICAL):
+#   Bang-bang policies (high-frequency oscillations) often give GOOD rewards but:
+#   - Create numerical artifacts in simulation
+#   - Are impractical (impossibly high actuation frequency)
+#   - Cannot be used in real applications
 #
-# RECOMMENDED STARTING POINT (current config):
-#   - observation.include_prev_action: true (CRITICAL for smoothness)
-#   - lambda_temporal: 0.0 (disabled, use action memory)
-#   - lambda_spatial: 0.0 (disabled, no patches)
-#   - lambda_global_mean: 0.05 (global zero-mean)
-#   - consistency.enable: false (start simple, expensive with 4096 agents)
-#   - buffer_size: 500_000 (reduced from 5M)
+#   MECHANISMS TO PREVENT BANG-BANG:
+#   1. lambda_temporal: 0.5
+#      → Directly penalizes |action(t) - action(t-1)|^2
+#      → Primary mechanism against oscillations
+#   2. consistency.enable: true, lambda: 0.3
+#      → Similar observations → similar actions
+#      → Prevents spatial bang-bang patterns
+#   3. lambda_global_mean: 0.1
+#      → Discourages large-magnitude actions
+#
+#   WARNING: Action memory (prev_action in obs) alone is NOT sufficient!
+#   The agent will learn bang-bang if it maximizes reward.
+#
+# HYPERPARAMETER TUNING:
+#   - If actions too uniform (drag reduction drops):
+#       → Reduce lambda_temporal: 0.5 → 0.2
+#       → Reduce consistency.lambda: 0.3 → 0.1
+#   - If actions still oscillate (bang-bang persists):
+#       → Increase lambda_temporal: 0.5 → 1.0
+#       → Increase consistency.lambda: 0.3 → 0.5
+#   - If training too slow:
+#       → Reduce buffer_size, gradient_steps
+#       → Reduce consistency.sample_size: 512 → 256
+#   - If memory issues:
+#       → Reduce buffer_size to 100K-200K
+#
+# CURRENT CONFIG (UPDATED FOR BANG-BANG PREVENTION):
+#   - observation.include_prev_action: true (temporal context)
+#   - lambda_temporal: 0.5 (ENABLED: prevents bang-bang)
+#   - lambda_spatial: 0.0 (N/A for point-based)
+#   - lambda_global_mean: 0.1 (increased from 0.05)
+#   - consistency.enable: true (ENABLED: prevents bang-bang)
+#   - consistency.lambda: 0.3 (strong smoothness enforcement)
+#   - buffer_size: 500_000 (may need reduction if OOM)
 #   - actor_hidden_dim: 16 (tiny MLP!)
 # ==============================================================================
