@@ -190,8 +190,8 @@ def analyze_policy_smoothness(checkpoint_path, config_path, num_episodes=5,
             episode_data['point_w'].append(float(w_val))
             episode_data['point_action'].append(float(action_val))
 
-            # Convert to dict for environment (actions are scalars)
-            action_dict = {agent: float(actions[i]) for i, agent in enumerate(agents)}
+            # Convert to dict for environment (keep as numpy arrays for env compatibility)
+            action_dict = {agent: np.array([actions[i]]) for i, agent in enumerate(agents)}
 
             # Step environment
             obs, rewards, dones, truncated, infos = env.step(action_dict)
