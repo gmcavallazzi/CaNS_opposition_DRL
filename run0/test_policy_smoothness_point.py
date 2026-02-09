@@ -172,7 +172,11 @@ def analyze_policy_smoothness(checkpoint_path, config_path, num_episodes=5,
 
             # Get deterministic actions (NO noise)
             with torch.no_grad():
-                actions = maddpg.select_actions_batched(obs_torch)  # [4096]
+                actions = maddpg.select_actions_batched(obs_torch)  # [4096] or [4096, 1]
+
+            # Ensure actions are 1D for storage [4096]
+            if actions.ndim == 2:
+                actions = actions.squeeze(-1)  # [4096, 1] -> [4096]
 
             # Store data
             episode_data['observations'].append(obs_array.copy())
@@ -181,13 +185,13 @@ def analyze_policy_smoothness(checkpoint_path, config_path, num_episodes=5,
             # Track specific point
             u_val = obs[track_agent_name][0]  # Scalar
             w_val = obs[track_agent_name][1]  # Scalar
-            action_val = actions[track_agent_idx]
+            action_val = actions[track_agent_idx]  # Now guaranteed to be scalar
             episode_data['point_u'].append(float(u_val))
             episode_data['point_w'].append(float(w_val))
             episode_data['point_action'].append(float(action_val))
 
-            # Convert to dict for environment
-            action_dict = {agent: actions[i] for i, agent in enumerate(agents)}
+            # Convert to dict for environment (actions are scalars)
+            action_dict = {agent: float(actions[i]) for i, agent in enumerate(agents)}
 
             # Step environment
             obs, rewards, dones, truncated, infos = env.step(action_dict)
@@ -198,7 +202,7 @@ def analyze_policy_smoothness(checkpoint_path, config_path, num_episodes=5,
 
         # Convert to arrays
         episode_data['observations'] = np.array(episode_data['observations'])  # [T, 4096, 2 or 3]
-        episode_data['actions'] = np.array(episode_data['actions'])            # [T, 4096]
+        episode_data['actions'] = np.array(episode_data['actions'])            # [T, 4096] (squeezed)
         episode_data['rewards'] = np.array(episode_data['rewards'])
         episode_data['dpdx'] = np.array(episode_data['dpdx'])
         episode_data['point_u'] = np.array(episode_data['point_u'])
