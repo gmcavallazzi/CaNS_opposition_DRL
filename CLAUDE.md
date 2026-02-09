@@ -9,6 +9,19 @@ This repository combines:
 - **Multi-Agent RL** - PettingZoo-based training environment with MADDPG
 - **Opposition Control** - Learning wall-normal actuation patterns to reduce drag
 
+## Training Environment
+
+**IMPORTANT:** Training happens on a **separate HPC cluster** (not local machine):
+- CaNS solver requires MPI and runs on HPC with 64+ MPI processes
+- Training scripts (`stwStart_*.py`) are executed on HPC compute nodes
+- TensorBoard logs, checkpoints, and results are generated on HPC
+- **Local development workflow:**
+  1. Develop/test code locally (unit tests, model architecture)
+  2. Push code to HPC cluster
+  3. Run training on HPC
+  4. Download logs/checkpoints/results for local analysis
+  5. Use local analysis scripts (`analyze_*.py`, `test_policy_smoothness.py`) to evaluate results
+
 ## Code Structure
 
 ```
