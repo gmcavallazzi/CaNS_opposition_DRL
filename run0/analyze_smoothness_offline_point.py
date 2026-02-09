@@ -77,31 +77,37 @@ def main():
     print(f"\nResults will be saved to: {output_dir}")
 
     # ============================================================================
-    # VISUALIZATION 1: Action field evolution over time
+    # VISUALIZATION 1: Action field evolution over time (consecutive pairs)
     # ============================================================================
-    print("\n[1/6] Creating action field evolution plot...")
+    print("\n[1/6] Creating action field evolution plot (consecutive pairs)...")
 
     fig, axes = plt.subplots(3, 4, figsize=(20, 15))
     axes = axes.flatten()
 
-    # Select 12 timesteps evenly spaced in the range
-    time_indices = np.linspace(0, len(actions_focused)-1, 12, dtype=int)
+    # Select 6 evenly spaced timesteps, then show each with its consecutive timestep
+    # This gives us 12 plots showing 6 pairs: (t, t+1)
+    n_pairs = 6
+    base_time_indices = np.linspace(0, len(actions_focused)-2, n_pairs, dtype=int)
 
-    for idx, t_local in enumerate(time_indices):
-        t_global = t_start + t_local
+    for pair_idx, t_base in enumerate(base_time_indices):
+        for offset in [0, 1]:  # Show t and t+1
+            plot_idx = pair_idx * 2 + offset
+            t_local = t_base + offset
+            t_global = t_start + t_local
 
-        # Reconstruct full 64×64 action field (simple reshape!)
-        action_field = actions_focused[t_local].reshape(64, 64)
+            # Reconstruct full 64×64 action field (simple reshape!)
+            action_field = actions_focused[t_local].reshape(64, 64)
 
-        im = axes[idx].imshow(action_field, cmap='seismic', vmin=-1, vmax=1,
-                              origin='lower', aspect='auto')
-        axes[idx].set_title(f't = {t_global}', fontsize=10)
-        axes[idx].set_xlabel('j (spanwise)', fontsize=8)
-        axes[idx].set_ylabel('i (streamwise)', fontsize=8)
+            im = axes[plot_idx].imshow(action_field, cmap='seismic', vmin=-1, vmax=1,
+                                       origin='lower', aspect='auto', interpolation='bilinear')
+            axes[plot_idx].set_title(f't = {t_global}', fontsize=10)
+            axes[plot_idx].set_xlabel('j (spanwise)', fontsize=8)
+            axes[plot_idx].set_ylabel('i (streamwise)', fontsize=8)
 
-    fig.colorbar(im, ax=axes, orientation='horizontal',
-                 fraction=0.05, pad=0.05, label='Action value')
-    plt.suptitle(f'Action Field Evolution (Point-Based, t={t_start} to {t_end})', fontsize=14)
+    # Add colorbar on the right side
+    fig.colorbar(im, ax=axes, orientation='vertical',
+                 fraction=0.02, pad=0.02, label='Action value')
+    plt.suptitle(f'Action Field Evolution - Consecutive Pairs (Point-Based, t={t_start} to {t_end})', fontsize=14)
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, 'action_evolution.png'), dpi=300, bbox_inches='tight')
     print("Saved: action_evolution.png")
@@ -121,22 +127,26 @@ def main():
     # Select 6 timesteps
     time_indices = np.linspace(0, len(temporal_grad)-1, 6, dtype=int)
 
+    # Compute global colormap limits (same for all subplots)
+    grad_fields = [temporal_grad[t].reshape(64, 64) for t in time_indices]
+    global_vmax = max(0.1, max(np.abs(gf).max() for gf in grad_fields))
+
     for idx, t_local in enumerate(time_indices):
         t_global = t_start + t_local
 
         # Reconstruct temporal gradient field
-        grad_field = temporal_grad[t_local].reshape(64, 64)
+        grad_field = grad_fields[idx]
 
-        vmax = max(0.1, np.abs(grad_field).max())
-        im = axes[idx].imshow(grad_field, cmap='RdBu_r', vmin=-vmax, vmax=vmax,
-                              origin='lower', aspect='auto')
+        # Use interpolation='bilinear' for smoothing
+        im = axes[idx].imshow(grad_field, cmap='RdBu_r', vmin=-global_vmax, vmax=global_vmax,
+                              origin='lower', aspect='auto', interpolation='bilinear')
         axes[idx].set_title(f'Δa(t={t_global} → {t_global+1})\n'
                            f'RMS={np.sqrt(np.mean(grad_field**2)):.4f}', fontsize=10)
         axes[idx].set_xlabel('j', fontsize=8)
         axes[idx].set_ylabel('i', fontsize=8)
         plt.colorbar(im, ax=axes[idx], fraction=0.046, pad=0.04)
 
-    plt.suptitle('Temporal Gradients (Action Changes)', fontsize=14)
+    plt.suptitle(f'Temporal Gradients (Action Changes) - Global vmax={global_vmax:.4f}', fontsize=14)
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, 'temporal_gradients.png'), dpi=300, bbox_inches='tight')
     print("Saved: temporal_gradients.png")
@@ -253,15 +263,16 @@ def main():
     plt.close()
 
     # ============================================================================
-    # VISUALIZATION 5: Input-output relationship at tracked point (32, 32)
+    # VISUALIZATION 5: Input-output relationship at tracked point (32, 32) + dpdx
     # ============================================================================
-    print("\n[5/6] Creating input-output comparison at point (32,32)...")
+    print("\n[5/6] Creating input-output comparison at point (32,32) with dpdx...")
 
     point_u = data['point_u'][t_start:t_end]
     point_w = data['point_w'][t_start:t_end]
     point_action = data['point_action'][t_start:t_end]
+    dpdx_focused = dpdx[t_start:t_end]
 
-    fig, axes = plt.subplots(4, 1, figsize=(15, 16))
+    fig, axes = plt.subplots(5, 1, figsize=(15, 20))
 
     t_vals = np.arange(t_start, t_end)
 
@@ -286,14 +297,24 @@ def main():
                      f'Mean={np.mean(point_action):.4f}, Std={np.std(point_action):.4f}')
     axes[2].grid(True, alpha=0.3)
 
-    # Correlation plot: action vs (u, w)
-    axes[3].scatter(point_u, point_action, alpha=0.3, s=10, label='U vs Action')
-    axes[3].scatter(point_w, point_action, alpha=0.3, s=10, label='W vs Action')
-    axes[3].set_xlabel('Velocity')
-    axes[3].set_ylabel('Action')
-    axes[3].set_title('Input-Output Correlation at point (32,32)')
-    axes[3].legend()
+    # dpdx (drag)
+    axes[3].plot(t_vals, dpdx_focused, linewidth=1, alpha=0.8, color='purple')
+    axes[3].set_ylabel('dpdx')
+    axes[3].set_title(f'Performance: Pressure Gradient (dpdx)\n'
+                     f'Mean={np.mean(dpdx_focused):.6f}, Std={np.std(dpdx_focused):.6f}')
+    axes[3].axhline(y=-0.0042, color='k', linestyle='--', alpha=0.5, label='Uncontrolled')
+    axes[3].axhline(y=-0.002, color='r', linestyle='--', alpha=0.5, label='Target')
+    axes[3].legend(loc='upper right')
     axes[3].grid(True, alpha=0.3)
+
+    # Correlation plot: action vs (u, w)
+    axes[4].scatter(point_u, point_action, alpha=0.3, s=10, label='U vs Action')
+    axes[4].scatter(point_w, point_action, alpha=0.3, s=10, label='W vs Action')
+    axes[4].set_xlabel('Velocity')
+    axes[4].set_ylabel('Action')
+    axes[4].set_title('Input-Output Correlation at point (32,32)')
+    axes[4].legend()
+    axes[4].grid(True, alpha=0.3)
 
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, 'input_output_point32_32.png'), dpi=300, bbox_inches='tight')
@@ -368,8 +389,16 @@ def main():
     print(f"  W velocity: mean={np.mean(point_w):.4f}, std={np.std(point_w):.4f}")
     print(f"  Action: mean={np.mean(point_action):.4f}, std={np.std(point_action):.4f}")
 
-    print(f"\nRewards (mean over focused window): {np.mean(rewards[t_start:t_end]):.2f}")
-    print(f"dpdx (mean over focused window): {np.mean(dpdx[t_start:t_end]):.6f}")
+    print(f"\nPerformance metrics:")
+    print(f"  Rewards (mean): {np.mean(rewards[t_start:t_end]):.2f}")
+    print(f"  dpdx (mean): {np.mean(dpdx[t_start:t_end]):.6f}")
+    print(f"  dpdx (min): {np.min(dpdx[t_start:t_end]):.6f}")
+    print(f"  dpdx (max): {np.max(dpdx[t_start:t_end]):.6f}")
+    uncontrolled = -0.0042
+    target = -0.002
+    dpdx_mean = np.mean(dpdx[t_start:t_end])
+    improvement = (uncontrolled - dpdx_mean) / (uncontrolled - target) * 100
+    print(f"  Drag reduction progress: {improvement:.1f}% (uncontrolled: {uncontrolled}, target: {target})")
 
     # Recompute dominant frequencies for summary
     top_idx = np.argsort(temporal_fft[1:])[-5:][::-1] + 1

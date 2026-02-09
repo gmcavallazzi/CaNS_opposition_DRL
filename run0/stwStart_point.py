@@ -21,6 +21,7 @@ from torch.utils.tensorboard import SummaryWriter
 from typing import Tuple, Optional, Dict, Any, List
 import json
 import argparse
+import zipfile
 import matplotlib
 matplotlib.use('Agg')  # Non-interactive backend for server use
 import matplotlib.pyplot as plt
@@ -318,7 +319,12 @@ def train_maddpg_point(
 
         if resume_buffer:
             print(f"Loading replay buffer from {resume_buffer}")
-            replay_buffer.load(resume_buffer)
+            try:
+                replay_buffer.load(resume_buffer)
+            except (zipfile.BadZipFile, EOFError, ValueError) as e:
+                print(f"Warning: Failed to load replay buffer: {e}")
+                print("Starting with empty replay buffer")
+                resume_buffer = None
 
     # Setup tensorboard writer
     current_time = datetime.now().strftime('%Y%m%d_%H%M%S')
